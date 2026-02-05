@@ -1,4 +1,4 @@
-﻿# PrankGuard 
+﻿# PrankGuard
 
 Webcam-based security system with face recognition, USB device detection, and automatic screen locking.
 
@@ -20,5 +20,3 @@ Webcam-based security system with face recognition, USB device detection, and au
 
 ## Run (admin required)
 `python prankguard.py`
-
-## EPITECH - T-SEC-902
