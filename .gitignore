@@ -1,0 +1,5 @@
+﻿__pycache__/
+*.pyc
+data/owner_faces/encodings.pkl
+.env
+venv/
