@@ -44,6 +44,12 @@ class DeviceCategory(str, Enum):
     PRINTER = "PRINTER"        # Imprimante reseau ou USB
 
 
+class UsbBlockMode(str, Enum):
+    """Mode de blocage USB (section 1.2 du plan v3)."""
+    DESKTOP = "DESKTOP"  # Bloque USBSTOR uniquement (cle USB) — garde clavier/souris
+    LAPTOP = "LAPTOP"    # Bloque USBSTOR + USBHUB3 (tous les USB externes)
+
+
 # Cooldown anti-faux positifs (en secondes)
 _COOLDOWN_AFTER_CONFIG_CHANGE_S = 6.0  # 5-8 secondes, on prend 6
 
@@ -123,10 +129,14 @@ class DeviceMonitor:
         cooldown_s: float = _COOLDOWN_AFTER_CONFIG_CHANGE_S,
         config_dir: Optional[Path] = None,
         enabled_categories: Optional[set[DeviceCategory]] = None,
+        usb_block_mode: UsbBlockMode = UsbBlockMode.DESKTOP,
     ) -> None:
         self._poll_interval = poll_interval_s
         self._cooldown_duration = cooldown_s
         self._config_dir = config_dir or _DEFAULT_CONFIG_DIR
+
+        # Mode USB Desktop/Laptop
+        self._usb_block_mode = usb_block_mode
 
         # Categories activees (toutes par defaut)
         self._enabled_categories = enabled_categories or set(DeviceCategory)
@@ -494,6 +504,73 @@ class DeviceMonitor:
 
         except Exception as exc:
             logger.error("Erreur Win32 message loop : %s", exc)
+
+    # ----- Mode USB Desktop/Laptop -----
+
+    @property
+    def usb_block_mode(self) -> UsbBlockMode:
+        return self._usb_block_mode
+
+    @usb_block_mode.setter
+    def usb_block_mode(self, mode: UsbBlockMode) -> None:
+        self._usb_block_mode = mode
+        logger.info("Mode USB change : %s", mode.value)
+
+    def block_usb(self) -> bool:
+        """
+        Bloque les ports USB selon le mode choisi.
+        DESKTOP : bloque USBSTOR (stockage USB) uniquement.
+        LAPTOP  : bloque USBSTOR + USBHUB3 (tous les USB externes).
+        Necessite des privileges administrateur.
+        """
+        services = ["USBSTOR"]
+        if self._usb_block_mode == UsbBlockMode.LAPTOP:
+            services.append("USBHUB3")
+
+        success = True
+        for svc in services:
+            if not self._set_service_start_type(svc, disabled=True):
+                success = False
+        return success
+
+    def unblock_usb(self) -> bool:
+        """Debloque les ports USB (restaure le demarrage automatique)."""
+        services = ["USBSTOR"]
+        if self._usb_block_mode == UsbBlockMode.LAPTOP:
+            services.append("USBHUB3")
+
+        success = True
+        for svc in services:
+            if not self._set_service_start_type(svc, disabled=False):
+                success = False
+        return success
+
+    @staticmethod
+    def _set_service_start_type(service_name: str, disabled: bool) -> bool:
+        """
+        Modifie le type de demarrage d'un service Windows via le registre.
+        Start = 4 (desactive) ou Start = 3 (demarrage manuel).
+        """
+        import winreg
+        key_path = f"SYSTEM\\CurrentControlSet\\Services\\{service_name}"
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE
+            )
+            start_value = 4 if disabled else 3
+            winreg.SetValueEx(key, "Start", 0, winreg.REG_DWORD, start_value)
+            winreg.CloseKey(key)
+            action = "bloque" if disabled else "debloque"
+            logger.info("Service %s %s (Start=%d)", service_name, action, start_value)
+            return True
+        except PermissionError:
+            logger.error(
+                "Privileges administrateur requis pour modifier %s", service_name
+            )
+            return False
+        except Exception as exc:
+            logger.error("Erreur modification service %s : %s", service_name, exc)
+            return False
 
     # ----- Emission d'evenements -----
 

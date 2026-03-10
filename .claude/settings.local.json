@@ -27,7 +27,12 @@
       "Bash(python -m src.security.encryption 2>&1)",
       "Bash(cd C:/Users/lucas/Desktop/CoursEpitech/prankguard && python -m pytest tests/ -v --tb=short 2>&1)",
       "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -c \"from src.agents.head_pose_agent import HeadPoseAgent; print\\('head_pose OK'\\)\" && python -c \"from src.agents.gaze_estimation_agent import GazeEstimationAgent; print\\('gaze OK'\\)\" && python -c \"from src.gui.gui import PrankGuardGUI, CameraTab, EnrollmentTab; print\\('gui OK'\\)\" && python -c \"from src.prankguard import PrankGuard, EscalationLevel, _get_idle_time_ms; print\\('prankguard OK'\\); print\\(f'Idle: {_get_idle_time_ms\\(\\)}ms'\\)\")",
-      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -x -q 2>&1 | head -80)"
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -x -q 2>&1 | head -80)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/test_decision_agent.py -v 2>&1 | head -80)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -20)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -25)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short -v 2>&1 | tail -40)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -10)"
     ]
   }
 }

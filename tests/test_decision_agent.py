@@ -237,11 +237,69 @@ class TestCooldown:
     def test_cooldown_expires(self):
         agent = DecisionAgent(cooldown_delay=0.05)
         agent.notify_unlock()
-        time.sleep(0.06)
+        time.sleep(0.1)
         result = agent.evaluate(AgentInputs(
             owner_detected=True, any_face_detected=True,
         ))
         assert result.situation == Situation.SAFE
+
+
+class TestOwnerGracePeriod:
+    """Grace period : l'owner est considere present 2s apres sa derniere detection."""
+
+    def test_owner_grace_period_idle(self):
+        """Owner frame → no face frame (dans les 2s) → doit rester SAFE."""
+        agent = DecisionAgent()
+        # Owner detecte
+        agent.evaluate(AgentInputs(
+            owner_detected=True, any_face_detected=True,
+            face_is_large_enough=True,
+        ))
+        # Aucun visage immediatement apres (dans la grace period)
+        result = agent.evaluate(AgentInputs(any_face_detected=False))
+        assert result.situation == Situation.SAFE
+        assert result.action == Action.NOTHING
+        assert "grace period" in result.reason.lower()
+
+    def test_owner_grace_period_expires(self):
+        """Owner frame → sleep 3s → no face frame → doit passer IDLE."""
+        agent = DecisionAgent()
+        agent.evaluate(AgentInputs(
+            owner_detected=True, any_face_detected=True,
+            face_is_large_enough=True,
+        ))
+        time.sleep(2.5)
+        result = agent.evaluate(AgentInputs(any_face_detected=False))
+        assert result.situation == Situation.IDLE
+
+    def test_owner_grace_period_no_effect_on_stranger(self):
+        """Owner frame → stranger frame (dans les 2s) → doit passer THREAT."""
+        agent = DecisionAgent()
+        agent.evaluate(AgentInputs(
+            owner_detected=True, any_face_detected=True,
+            face_is_large_enough=True,
+        ))
+        # Stranger avec conditions THREAT
+        result = agent.evaluate(AgentInputs(
+            stranger_detected=True, any_face_detected=True,
+            face_is_large_enough=True,
+            gaze_looking_at_screen=True, head_looking_at_screen=True,
+        ))
+        assert result.situation == Situation.THREAT
+
+    def test_oscillation_scenario(self):
+        """Simuler 10 frames alternant owner/no_face → jamais IDLE."""
+        agent = DecisionAgent(mode=SecurityMode.SECURE, idle_delay=0.5)
+        for _ in range(10):
+            # Owner detecte
+            agent.evaluate(AgentInputs(
+                owner_detected=True, any_face_detected=True,
+                face_is_large_enough=True,
+            ))
+            # Aucun visage (grace period active)
+            result = agent.evaluate(AgentInputs(any_face_detected=False))
+            assert result.situation == Situation.SAFE
+            assert result.action == Action.NOTHING
 
 
 class TestShoulderSurfer:

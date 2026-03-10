@@ -284,6 +284,31 @@ class SettingsTab(ctk.CTkFrame):
         )
         self._profile_menu.pack(fill="x", padx=10, pady=(0, 15))
 
+        # --- Mode USB Desktop / Laptop ---
+        self._usb_mode_label = ctk.CTkLabel(
+            self._scroll, text="Mode USB",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self._usb_mode_label.pack(anchor="w", padx=10, pady=(10, 5))
+
+        self._usb_mode_var = ctk.StringVar(value="DESKTOP")
+        self._usb_mode_menu = ctk.CTkSegmentedButton(
+            self._scroll,
+            values=["DESKTOP", "LAPTOP"],
+            variable=self._usb_mode_var,
+        )
+        self._usb_mode_menu.pack(fill="x", padx=10, pady=(0, 5))
+
+        self._usb_mode_desc = ctk.CTkLabel(
+            self._scroll,
+            text="DESKTOP : bloque stockage USB uniquement\n"
+                 "LAPTOP : bloque tous les USB externes",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left",
+        )
+        self._usb_mode_desc.pack(anchor="w", padx=10, pady=(0, 15))
+
         # --- Surveillance peripheriques ---
         self._device_label = ctk.CTkLabel(
             self._scroll, text="Surveillance peripheriques",
@@ -327,6 +352,10 @@ class SettingsTab(ctk.CTkFrame):
             if switch.get()
         }
 
+    @property
+    def usb_mode(self) -> str:
+        return self._usb_mode_var.get()
+
     def set_mode(self, mode: str) -> None:
         self._mode_var.set(mode)
 
@@ -335,6 +364,9 @@ class SettingsTab(ctk.CTkFrame):
 
     def set_profile(self, profile: str) -> None:
         self._profile_var.set(profile)
+
+    def set_usb_mode(self, mode: str) -> None:
+        self._usb_mode_var.set(mode)
 
 
 # ---------------------------------------------------------------------------

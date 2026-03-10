@@ -281,48 +281,102 @@ class FaceRecognitionAgent:
 
     def save_owner_encodings(self, path: Optional[Path] = None) -> Path:
         """
-        Sauvegarde les encodings du propriétaire dans un fichier .npz.
-        Note : le chiffrement AES-256 sera ajouté par le module de chiffrement (priorité 13).
+        Sauvegarde les encodings du propriétaire en AES-256-GCM.
+        Migration automatique : si un .npz non chiffre existe, il est chiffre
+        puis supprime.
         """
         if not self._owner_encodings:
             raise ValueError("Aucun encoding à sauvegarder")
 
         save_dir = path or self._encodings_dir
+        config_dir = save_dir.parent if save_dir != self._encodings_dir else None
+
+        try:
+            from src.security.encryption import save_encrypted_owner_encodings
+            filepath = save_encrypted_owner_encodings(
+                self._owner_encodings, config_dir=config_dir
+            )
+            # Supprimer l'ancien .npz non chiffre si present
+            legacy = save_dir / "owner_encodings.npz"
+            if legacy.exists():
+                legacy.unlink()
+                logger.info("Ancien fichier .npz non chiffre supprime (migration)")
+            logger.info("Encodings chiffres sauvegardes dans %s", filepath)
+            return filepath
+        except ImportError:
+            logger.warning("Module encryption indisponible, sauvegarde en .npz")
+            return self._save_owner_encodings_legacy(save_dir)
+
+    def _save_owner_encodings_legacy(self, save_dir: Path) -> Path:
+        """Sauvegarde en .npz non chiffre (fallback)."""
         save_dir.mkdir(parents=True, exist_ok=True)
         filepath = save_dir / "owner_encodings.npz"
-
-        np.savez(
-            filepath,
-            encodings=np.array(self._owner_encodings),
-        )
-        logger.info("Encodings sauvegardés dans %s", filepath)
+        np.savez(filepath, encodings=np.array(self._owner_encodings))
+        logger.info("Encodings sauvegardes (non chiffres) dans %s", filepath)
         return filepath
 
     def load_owner_encodings(self, path: Optional[Path] = None) -> int:
         """
-        Charge les encodings du propriétaire depuis un fichier .npz.
-        Retourne le nombre d'encodings chargés.
+        Charge les encodings du proprietaire.
+        Essaie d'abord le fichier chiffre (.enc), puis le .npz legacy.
+        Si un .npz non chiffre est trouve, le migre automatiquement vers .enc.
         """
         load_dir = path or self._encodings_dir
-        filepath = load_dir / "owner_encodings.npz"
+        config_dir = load_dir.parent if load_dir != self._encodings_dir else None
 
+        # 1. Essayer le fichier chiffre
+        try:
+            from src.security.encryption import load_encrypted_owner_encodings
+            loaded = load_encrypted_owner_encodings(config_dir=config_dir)
+            if loaded:
+                self._owner_encodings = loaded
+                count = len(self._owner_encodings)
+                logger.info("%d encodings proprietaire charges (chiffres)", count)
+                return count
+        except ImportError:
+            logger.debug("Module encryption indisponible")
+        except Exception as exc:
+            logger.warning("Erreur lecture encodings chiffres : %s", exc)
+
+        # 2. Fallback : fichier .npz non chiffre
+        filepath = load_dir / "owner_encodings.npz"
         if not filepath.exists():
-            logger.warning("Aucun encoding trouvé dans %s", filepath)
+            logger.warning("Aucun encoding trouve dans %s", load_dir)
             return 0
 
         data = np.load(filepath)
         self._owner_encodings = list(data["encodings"])
         count = len(self._owner_encodings)
-        logger.info("%d encodings propriétaire chargés", count)
+        logger.info("%d encodings proprietaire charges (non chiffres)", count)
+
+        # 3. Migration automatique vers le format chiffre
+        try:
+            from src.security.encryption import save_encrypted_owner_encodings
+            save_encrypted_owner_encodings(self._owner_encodings, config_dir=config_dir)
+            filepath.unlink()
+            logger.info("Migration .npz -> .enc terminee (ancien fichier supprime)")
+        except Exception as exc:
+            logger.warning("Migration chiffrement echouee : %s", exc)
+
         return count
 
     def clear_owner_encodings(self) -> None:
-        """Supprime tous les encodings du propriétaire (RGPD : droit à l'effacement)."""
+        """Supprime tous les encodings du proprietaire (RGPD : droit a l'effacement)."""
         self._owner_encodings.clear()
+
+        # Supprimer le fichier chiffre
+        try:
+            from src.security.encryption import delete_encrypted_encodings
+            delete_encrypted_encodings()
+        except Exception:
+            pass
+
+        # Supprimer l'ancien .npz si present
         filepath = self._encodings_dir / "owner_encodings.npz"
         if filepath.exists():
             filepath.unlink()
-            logger.info("Encodings propriétaire supprimés")
+
+        logger.info("Encodings proprietaire supprimes")
 
     # ----- Analyse d'une frame -----
 

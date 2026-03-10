@@ -51,10 +51,13 @@ from src.agents.decision_agent import (
     Action,
     SecurityMode,
     Situation,
+    OWNER_GRACE_PERIOD_S,
 )
 from src.agents.auto_throttle import AutoThrottle, ThrottleLevel, ThrottleState
-from src.agents.device_monitor import DeviceMonitor, DeviceEvent, DeviceCategory
+from src.agents.device_monitor import DeviceMonitor, DeviceEvent, DeviceCategory, UsbBlockMode
 from src.gui.gui import PrankGuardGUI
+from src.gui.systray import SysTrayManager
+from src.security.audit_trail import AuditTrail
 
 logger = logging.getLogger("prankguard")
 
@@ -139,8 +142,10 @@ class PrankGuard:
         # Shared MediaPipe FaceMesh (head_pose + gaze partagent une instance)
         self._shared_face_mesh = None
 
-        # GUI
+        # GUI + Systray + Audit trail
         self._gui: Optional[PrankGuardGUI] = None
+        self._systray: Optional[SysTrayManager] = None
+        self._audit_trail: Optional[AuditTrail] = None
 
         # Etat general
         self._phase = Phase.VEILLE
@@ -155,6 +160,9 @@ class PrankGuard:
         self._escalation_cooldown_until: float = 0.0
         self._alerte_start: float = 0.0
         self._next_soft_check: float = 0.0
+
+        # Grace period owner dans l'escalade (anti-oscillation)
+        self._owner_last_seen_escalation: float = 0.0
 
         # Threads
         self._active_thread: Optional[threading.Thread] = None
@@ -212,11 +220,23 @@ class PrankGuard:
         )
         self._escalation_thread.start()
 
-        # 7. Creer et configurer la GUI
+        # 7. Demarrer l'audit trail
+        self._audit_trail = AuditTrail()
+        self._audit_trail.start()
+        self._audit_trail.log("VEILLE", "INFO", "PrankGuard demarre")
+
+        # 8. Creer et configurer la GUI
         self._gui = PrankGuardGUI()
         self._configure_gui()
 
-        # 8. Log initial
+        # 9. Demarrer le systray (RGPD : icone toujours visible)
+        self._systray = SysTrayManager()
+        self._systray.set_show_callback(self._toggle_window_visibility)
+        self._systray.set_pause_callback(self._toggle_pause)
+        self._systray.set_quit_callback(self._quit_from_systray)
+        self._systray.start()
+
+        # 10. Log initial
         self._gui.logs_tab.add_log("PrankGuard demarre", "INFO")
         self._gui.logs_tab.add_log(f"Profil : {self._profile.profile}", "INFO")
         self._gui.logs_tab.add_log(
@@ -225,11 +245,11 @@ class PrankGuard:
         self._gui.update_profile(self._profile.profile)
         self._gui.update_level(self._escalation_level.value)
 
-        # 9. Lancer la GUI (bloquant)
+        # 11. Lancer la GUI (bloquant)
         logger.info("Lancement de la GUI")
         self._gui.run()
 
-        # 10. Arret propre apres fermeture de la GUI
+        # 12. Arret propre apres fermeture de la GUI
         self.stop()
 
     def stop(self) -> None:
@@ -237,6 +257,11 @@ class PrankGuard:
         logger.info("Arret de PrankGuard...")
         self._running = False
 
+        if self._systray:
+            self._systray.stop()
+        if self._audit_trail:
+            self._audit_trail.log("VEILLE", "INFO", "PrankGuard arrete")
+            self._audit_trail.stop()
         if self._motion_agent:
             self._motion_agent.stop()
         if self._auto_throttle:
@@ -457,12 +482,19 @@ class PrankGuard:
                 )
                 self._active_thread.start()
 
-        # Mettre a jour la GUI
+        # Mettre a jour la GUI + systray + audit
         if self._gui:
             self._gui.update_level(level.value)
             self._gui.update_phase(level.value)
             self._gui.logs_tab.add_log(
                 f"Niveau : {old.value} -> {level.value}", "INFO"
+            )
+        if self._systray:
+            self._systray.update_level(level.value)
+        if self._audit_trail:
+            self._audit_trail.log(
+                level.value, "INFO",
+                f"Escalade : {old.value} -> {level.value}",
             )
 
     def _do_soft_face_check(self, now: float) -> None:
@@ -477,13 +509,18 @@ class PrankGuard:
                 recog = self._face_agent.analyze(frame)
                 if recog.owner_detected:
                     # Owner confirme → rester en SOFT
+                    self._owner_last_seen_escalation = now
                     logger.debug("SOFT check : owner confirme")
                 elif recog.stranger_detected:
                     # Inconnu detecte → escalade ALERTE
                     logger.info("SOFT check : inconnu detecte -> ALERTE")
                     self._escalate_to(EscalationLevel.ALERTE, now)
                     return
-                # Aucun visage = normal (owner peut etre hors champ)
+                else:
+                    # Aucun visage : grace period anti-oscillation
+                    if (now - self._owner_last_seen_escalation) < OWNER_GRACE_PERIOD_S:
+                        logger.debug("SOFT check : aucun visage mais owner vu recemment (grace period)")
+                    # Sinon, aucun visage = normal (owner peut etre hors champ)
             except Exception as exc:
                 logger.error("Erreur SOFT face check : %s", exc)
 
@@ -500,10 +537,19 @@ class PrankGuard:
                 recog = self._face_agent.analyze(frame)
                 if recog.owner_detected:
                     # Owner reconnu → retour SOFT + cooldown 10s
+                    self._owner_last_seen_escalation = now
                     logger.info("ALERTE : owner reconnu -> SOFT + cooldown 10s")
                     self._escalate_to(EscalationLevel.SOFT, now)
                     self._escalation_cooldown_until = now + _ALERTE_TO_SOFT_COOLDOWN_S
                     return
+                elif not recog.faces:
+                    # Aucun visage : grace period anti-oscillation
+                    if (now - self._owner_last_seen_escalation) < OWNER_GRACE_PERIOD_S:
+                        # Owner vu recemment, ne pas compter cette frame
+                        # comme confirmation non-owner → reset le timer alerte
+                        self._alerte_start = now
+                        logger.debug("ALERTE : aucun visage mais owner vu recemment (grace period)")
+                        return
             except Exception as exc:
                 logger.error("Erreur ALERTE face check : %s", exc)
 
@@ -595,6 +641,7 @@ class PrankGuard:
             # Owner detecte en ACTIF → retour immediat en SOFT
             if inputs.owner_detected and not inputs.owner_and_stranger:
                 now = time.monotonic()
+                self._owner_last_seen_escalation = now
                 self._escalate_to(EscalationLevel.SOFT, now)
                 self._escalation_cooldown_until = now + _ALERTE_TO_SOFT_COOLDOWN_S
                 continue
@@ -715,6 +762,11 @@ class PrankGuard:
     def _execute_lock(self, reason: str) -> None:
         """Verrouille le PC avec cooldown post-lock."""
         logger.warning("VERROUILLAGE : %s", reason)
+        if self._audit_trail:
+            self._audit_trail.log(
+                self._escalation_level.value, "CRITICAL",
+                f"VERROUILLAGE : {reason}",
+            )
         DecisionAgent.lock_workstation()
 
         # Activer le cooldown
@@ -792,6 +844,25 @@ class PrankGuard:
     # Actions manuelles (raccourcis GUI)
     # =====================================================================
 
+    def _toggle_window_visibility(self) -> None:
+        """Affiche ou masque la fenetre principale (depuis systray)."""
+        if self._gui:
+            try:
+                if self._gui.state() == "withdrawn":
+                    self._gui.deiconify()
+                else:
+                    self._gui.withdraw()
+            except Exception:
+                pass
+
+    def _quit_from_systray(self) -> None:
+        """Quitte l'application depuis le systray."""
+        if self._gui:
+            try:
+                self._gui.destroy()
+            except Exception:
+                pass
+
     def _manual_lock(self) -> None:
         """Verrouillage manuel (raccourci L)."""
         self._execute_lock("Verrouillage manuel")
@@ -803,6 +874,13 @@ class PrankGuard:
         logger.info("Surveillance : %s", state)
         if self._gui:
             self._gui.logs_tab.add_log(f"Surveillance : {state}", "INFO")
+        if self._systray:
+            self._systray.update_paused(self._is_paused)
+        if self._audit_trail:
+            self._audit_trail.log(
+                self._escalation_level.value, "INFO",
+                f"Surveillance : {state}",
+            )
 
     # =====================================================================
     # Enrollment

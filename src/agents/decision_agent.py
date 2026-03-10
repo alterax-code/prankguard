@@ -72,6 +72,11 @@ UNLOCK_COOLDOWN_S = 3.0          # Cooldown après déverrouillage
 # Nombre minimum de conditions remplies pour THREAT (sur gaze, head_pose, trajectory)
 MIN_THREAT_CONDITIONS = 2
 
+# Grace period : duree pendant laquelle l'owner est considere present apres
+# sa derniere detection. Evite l'oscillation "owner / no face" lors
+# d'une occlusion partielle (main devant le visage, etc.)
+OWNER_GRACE_PERIOD_S = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Structures de données d'entrée
@@ -170,6 +175,9 @@ class DecisionAgent:
         self._idle_last_tick: Optional[float] = None
         self._cooldown_until: float = 0.0            # Timestamp fin de cooldown
 
+        # Grace period : dernier instant ou l'owner a ete vu
+        self._owner_last_seen: float = 0.0
+
         # Callbacks
         self._decision_callbacks: list[DecisionCallback] = []
 
@@ -239,6 +247,7 @@ class DecisionAgent:
 
         # --- Étape 1 : Owner reconnu ? → STOP immédiat ---
         if inputs.owner_detected and not inputs.owner_and_stranger:
+            self._owner_last_seen = now
             result.situation = Situation.SAFE
             result.action = Action.NOTHING
             result.reason = "Propriétaire reconnu"
@@ -248,6 +257,7 @@ class DecisionAgent:
 
         # --- Étape 2 : Owner + stranger ? → SHOULDER SURFER ---
         if inputs.owner_and_stranger:
+            self._owner_last_seen = now
             result.situation = Situation.SHOULDER_SURFER
             result.action = Action.ALERT
             result.reason = "Proprietaire + inconnu detectes : alerte shoulder surfer"
@@ -283,6 +293,17 @@ class DecisionAgent:
 
         # --- Étape 4 : Visage détecté mais trop petit → PASSING ---
         if inputs.any_face_detected and not inputs.face_is_large_enough:
+            # Grace period : si l'owner etait la recemment et pas de stranger
+            if (
+                not inputs.stranger_detected
+                and (now - self._owner_last_seen) < OWNER_GRACE_PERIOD_S
+            ):
+                result.situation = Situation.SAFE
+                result.action = Action.NOTHING
+                result.reason = "Owner vu récemment (grace period)"
+                self._threat_start = None
+                self._emit(result)
+                return result
             result.situation = Situation.PASSING
             result.action = Action.NOTHING
             result.reason = "Visage détecté au loin (trop petit)"
@@ -293,6 +314,17 @@ class DecisionAgent:
 
         # --- Étape 5 : Aucun visage → IDLE ---
         if not inputs.any_face_detected:
+            # Grace period : si l'owner etait la recemment et pas de stranger
+            if (
+                not inputs.stranger_detected
+                and (now - self._owner_last_seen) < OWNER_GRACE_PERIOD_S
+            ):
+                result.situation = Situation.SAFE
+                result.action = Action.NOTHING
+                result.reason = "Owner vu récemment (grace period)"
+                self._threat_start = None
+                self._emit(result)
+                return result
             result.situation = Situation.IDLE
             result.action = Action.NOTHING
             result.reason = "Aucun visage détecté"
