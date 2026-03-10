@@ -146,12 +146,6 @@ class CameraTab(ctk.CTkFrame):
             light_image=img, dark_image=img,
             size=(_CAMERA_DISPLAY_WIDTH, _CAMERA_DISPLAY_HEIGHT),
         )
-
-        # Mettre a jour la barre d'etat sous la video
-        label_text = _OVERLAY_LABELS.get(situation, situation)
-        label_color = _OVERLAY_COLORS.get(situation, "#6b7280")
-        self._status_label.configure(text=label_text, text_color=label_color)
-
         self._video_label.configure(image=self._current_image, text="")
 
     def update_status(self, text: str) -> None:

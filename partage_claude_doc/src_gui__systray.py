@@ -103,9 +103,6 @@ class SysTrayManager:
         self._pause_callback: Optional[Callable[[], None]] = None
         self._quit_callback: Optional[Callable[[], None]] = None
 
-        # Scheduler pour poster les callbacks sur le thread principal (Tkinter)
-        self._schedule_fn: Optional[Callable[[Callable], None]] = None
-
     # ----- Callbacks -----
 
     def set_show_callback(self, callback: Callable[[], None]) -> None:
@@ -116,12 +113,6 @@ class SysTrayManager:
 
     def set_quit_callback(self, callback: Callable[[], None]) -> None:
         self._quit_callback = callback
-
-    def set_main_thread_scheduler(self, fn: Callable[[Callable], None]) -> None:
-        """Definit la fonction pour poster des callbacks sur le thread principal.
-        Typiquement : lambda cb: gui.after(0, cb)
-        """
-        self._schedule_fn = fn
 
     # ----- Mise a jour -----
 
@@ -211,24 +202,15 @@ class SysTrayManager:
 
     def _on_show(self, icon=None, item=None) -> None:
         if self._show_callback:
-            if self._schedule_fn:
-                self._schedule_fn(self._show_callback)
-            else:
-                self._show_callback()
+            self._show_callback()
 
     def _on_pause(self, icon=None, item=None) -> None:
         self._is_paused = not self._is_paused
         self._refresh_icon()
         if self._pause_callback:
-            if self._schedule_fn:
-                self._schedule_fn(self._pause_callback)
-            else:
-                self._pause_callback()
+            self._pause_callback()
 
     def _on_quit(self, icon=None, item=None) -> None:
         if self._quit_callback:
-            if self._schedule_fn:
-                self._schedule_fn(self._quit_callback)
-            else:
-                self._quit_callback()
+            self._quit_callback()
         self.stop()

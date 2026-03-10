@@ -32,7 +32,10 @@
       "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -20)",
       "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -25)",
       "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short -v 2>&1 | tail -40)",
-      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -10)"
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest --tb=short 2>&1 | tail -10)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -v 2>&1 | tail -20)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -v 2>&1 | tail -5)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -v 2>&1 | tail -10)"
     ]
   }
 }

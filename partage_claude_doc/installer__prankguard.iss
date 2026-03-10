@@ -45,7 +45,7 @@ Source: "..\dist\PrankGuard.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\models\buffalo_sc\*"; DestDir: "{app}\models\buffalo_sc"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Donnees
-Source: "..\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "..\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: DirExists(ExpandConstant('{src}\..\data'))
 
 [Icons]
 ; Raccourci bureau
@@ -64,3 +64,9 @@ Filename: "{app}\PrankGuard.exe"; Description: "Lancer PrankGuard"; Flags: nowai
 Type: filesandordirs; Name: "{userappdata}\PrankGuard\logs"
 Type: filesandordirs; Name: "{userappdata}\PrankGuard\models"
 ; Note : on ne supprime PAS les encodings (choix utilisateur RGPD)
+
+[Code]
+function DirExists(DirName: string): Boolean;
+begin
+  Result := DirExists(DirName);
+end;

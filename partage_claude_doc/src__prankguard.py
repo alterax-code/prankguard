@@ -234,7 +234,6 @@ class PrankGuard:
         self._systray.set_show_callback(self._toggle_window_visibility)
         self._systray.set_pause_callback(self._toggle_pause)
         self._systray.set_quit_callback(self._quit_from_systray)
-        self._systray.set_main_thread_scheduler(lambda cb: self._gui.after(0, cb))
         self._systray.start()
 
         # 10. Log initial
@@ -546,7 +545,9 @@ class PrankGuard:
                 elif not recog.faces:
                     # Aucun visage : grace period anti-oscillation
                     if (now - self._owner_last_seen_escalation) < OWNER_GRACE_PERIOD_S:
-                        # Owner vu recemment, ignorer cette frame sans toucher _alerte_start
+                        # Owner vu recemment, ne pas compter cette frame
+                        # comme confirmation non-owner → reset le timer alerte
+                        self._alerte_start = now
                         logger.debug("ALERTE : aucun visage mais owner vu recemment (grace period)")
                         return
             except Exception as exc:

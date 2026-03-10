@@ -1,3 +1,1 @@
-from .guardian import Guardian, GuardianState
-
-__all__ = ["Guardian", "GuardianState"]
+# src/core — modules utilitaires (hardware_profiler, model_downloader)

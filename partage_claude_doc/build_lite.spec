@@ -21,7 +21,7 @@ block_cipher = None
 ROOT = Path(SPECPATH)
 
 a = Analysis(
-    [str(ROOT / 'src' / 'prankguard.py')],
+    [str(ROOT / 'src' / 'main.py')],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[
