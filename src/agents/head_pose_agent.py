@@ -265,6 +265,36 @@ class HeadPoseAgent:
 
         return results
 
+    # ----- Analyse depuis résultat MediaPipe partagé -----
+
+    def analyze_from_mp_result(self, mp_result, w: int, h: int) -> HeadPoseResult:
+        """
+        Analyse a partir d'un resultat MediaPipe pre-calcule (FaceMesh partage).
+        Evite de creer une seconde instance FaceMesh.
+        """
+        start = time.perf_counter()
+        result = HeadPoseResult(timestamp=time.monotonic())
+
+        self._update_camera_matrix(w, h)
+
+        if not mp_result or not mp_result.multi_face_landmarks:
+            result.inference_ms = (time.perf_counter() - start) * 1000.0
+            return result
+
+        landmarks = mp_result.multi_face_landmarks[0]
+        image_points = self._extract_image_points(landmarks, w, h)
+        yaw, pitch, roll = self._solve_pose(image_points)
+
+        result.yaw = round(yaw, 1)
+        result.pitch = round(pitch, 1)
+        result.roll = round(roll, 1)
+        result.face_detected = True
+        result.looking_at_screen = (
+            abs(yaw) < self._yaw_threshold and abs(pitch) < self._pitch_threshold
+        )
+        result.inference_ms = (time.perf_counter() - start) * 1000.0
+        return result
+
     # ----- Méthodes internes -----
 
     def _update_camera_matrix(self, w: int, h: int) -> None:

@@ -251,6 +251,36 @@ class GazeEstimationAgent:
 
         return results
 
+    # ----- Analyse depuis résultat MediaPipe partagé -----
+
+    def analyze_from_mp_result(self, mp_result, w: int, h: int) -> GazeResult:
+        """
+        Analyse a partir d'un resultat MediaPipe pre-calcule (FaceMesh partage).
+        Evite de creer une seconde instance FaceMesh.
+        """
+        start = time.perf_counter()
+        result = GazeResult(timestamp=time.monotonic())
+
+        if not mp_result or not mp_result.multi_face_landmarks:
+            result.inference_ms = (time.perf_counter() - start) * 1000.0
+            return result
+
+        landmarks = mp_result.multi_face_landmarks[0]
+        result.face_detected = True
+
+        result.left_gaze_ratio = self._compute_eye_gaze_ratio(
+            landmarks, w, h, _LEFT_EYE_CONTOUR, _LEFT_IRIS_CENTER
+        )
+        result.right_gaze_ratio = self._compute_eye_gaze_ratio(
+            landmarks, w, h, _RIGHT_EYE_CONTOUR, _RIGHT_IRIS_CENTER
+        )
+        result.average_gaze_ratio = round(
+            (result.left_gaze_ratio + result.right_gaze_ratio) / 2.0, 4
+        )
+        result.looking_at_screen = result.average_gaze_ratio <= self._gaze_threshold
+        result.inference_ms = (time.perf_counter() - start) * 1000.0
+        return result
+
     # ----- Calcul interne -----
 
     def _compute_eye_gaze_ratio(

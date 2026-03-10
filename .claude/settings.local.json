@@ -25,7 +25,9 @@
       "Bash(python -u -c \"\nimport sys, io\nsys.stdout = io.TextIOWrapper\\(sys.stdout.buffer, encoding='utf-8'\\)\nfrom docx import Document\n\ndoc = Document\\('PrankGuard_Plan_Complet_v3.docx'\\)\nfor i, table in enumerate\\(doc.tables\\):\n    rows = []\n    for row in table.rows:\n        cells = [cell.text.strip\\(\\) for cell in row.cells]\n        rows.append\\(cells\\)\n    text_all = ' '.join\\(str\\(r\\) for r in rows\\)\n    if 'RGPD' in text_all or 'consentement' in text_all.lower\\(\\) or 'chiffrement' in text_all.lower\\(\\) or 'AES' in text_all:\n        print\\(f'=== Table {i} ==='\\)\n        for row in rows:\n            print\\(' | '.join\\(row\\)\\)\n        print\\(\\)\n\" 2>&1)",
       "Bash(python -c \"from src.security.rgpd import has_consent, show_consent_dialog, delete_all_user_data; print\\('RGPD Import OK'\\)\" 2>&1 && python -c \"from src.security.encryption import encrypt_encodings, decrypt_encodings, save_encrypted_owner_encodings, load_encrypted_owner_encodings; print\\('Encryption Import OK'\\)\" 2>&1)",
       "Bash(python -m src.security.encryption 2>&1)",
-      "Bash(cd C:/Users/lucas/Desktop/CoursEpitech/prankguard && python -m pytest tests/ -v --tb=short 2>&1)"
+      "Bash(cd C:/Users/lucas/Desktop/CoursEpitech/prankguard && python -m pytest tests/ -v --tb=short 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -c \"from src.agents.head_pose_agent import HeadPoseAgent; print\\('head_pose OK'\\)\" && python -c \"from src.agents.gaze_estimation_agent import GazeEstimationAgent; print\\('gaze OK'\\)\" && python -c \"from src.gui.gui import PrankGuardGUI, CameraTab, EnrollmentTab; print\\('gui OK'\\)\" && python -c \"from src.prankguard import PrankGuard, EscalationLevel, _get_idle_time_ms; print\\('prankguard OK'\\); print\\(f'Idle: {_get_idle_time_ms\\(\\)}ms'\\)\")",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\Desktop\\\\CoursEpitech\\\\prankguard\" && python -m pytest tests/ -x -q 2>&1 | head -80)"
     ]
   }
 }

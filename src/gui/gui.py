@@ -25,7 +25,7 @@ from typing import Callable, Optional
 import customtkinter as ctk
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image
 
 logger = logging.getLogger("prankguard.gui")
 
@@ -96,10 +96,28 @@ class CameraTab(ctk.CTkFrame):
 
         # Etat courant
         self._current_situation = "IDLE"
-        self._current_photo: Optional[ImageTk.PhotoImage] = None
+        self._current_image: Optional[ctk.CTkImage] = None
+
+        # Thread-safe : derniere frame en attente (tuple ou None)
+        self._pending_data = None
+
+        # Timer de rendu sur le main thread (~30 FPS)
+        self._poll_camera()
 
     def update_frame(self, frame: np.ndarray, situation: str = "SAFE") -> None:
-        """Met a jour l'affichage video avec overlay colore."""
+        """Thread-safe : stocke la derniere frame pour rendu sur le main thread."""
+        self._pending_data = (frame.copy(), situation)
+
+    def _poll_camera(self) -> None:
+        """Rend la derniere frame en attente sur le main thread (~30 FPS)."""
+        data = self._pending_data
+        if data is not None:
+            self._pending_data = None
+            self._render_frame(data[0], data[1])
+        self.after(33, self._poll_camera)
+
+    def _render_frame(self, frame: np.ndarray, situation: str) -> None:
+        """Rendu effectif sur le main thread avec CTkImage."""
         self._current_situation = situation
 
         # Redimensionner
@@ -121,11 +139,14 @@ class CameraTab(ctk.CTkFrame):
             (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
         )
 
-        # Convertir BGR -> RGB -> PIL -> Tkinter
+        # Convertir BGR -> RGB -> PIL -> CTkImage
         rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(rgb)
-        self._current_photo = ImageTk.PhotoImage(image=img)
-        self._video_label.configure(image=self._current_photo, text="")
+        self._current_image = ctk.CTkImage(
+            light_image=img, dark_image=img,
+            size=(_CAMERA_DISPLAY_WIDTH, _CAMERA_DISPLAY_HEIGHT),
+        )
+        self._video_label.configure(image=self._current_image, text="")
 
     def update_status(self, text: str) -> None:
         """Met a jour le texte de la barre d'etat."""
@@ -380,7 +401,13 @@ class EnrollmentTab(ctk.CTkFrame):
         # Etat
         self._capture_count = 0
         self._max_captures = 10
-        self._current_photo: Optional[ImageTk.PhotoImage] = None
+        self._current_preview_image: Optional[ctk.CTkImage] = None
+
+        # Thread-safe : derniere frame preview en attente
+        self._pending_preview = None
+
+        # Timer de rendu preview sur le main thread
+        self._poll_preview()
 
     def set_capture_callback(self, callback: Callable[[], None]) -> None:
         self._capture_btn.configure(command=callback)
@@ -392,12 +419,26 @@ class EnrollmentTab(ctk.CTkFrame):
         self._clear_btn.configure(command=callback)
 
     def update_preview(self, frame: np.ndarray) -> None:
-        """Met a jour l'apercu camera de l'enrollment."""
+        """Thread-safe : stocke la derniere frame pour rendu sur le main thread."""
+        self._pending_preview = frame.copy()
+
+    def _poll_preview(self) -> None:
+        """Rend le dernier apercu en attente sur le main thread."""
+        data = self._pending_preview
+        if data is not None:
+            self._pending_preview = None
+            self._render_preview(data)
+        self.after(100, self._poll_preview)
+
+    def _render_preview(self, frame: np.ndarray) -> None:
+        """Rendu effectif de l'apercu sur le main thread avec CTkImage."""
         resized = cv2.resize(frame, (320, 240))
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(rgb)
-        self._current_photo = ImageTk.PhotoImage(image=img)
-        self._preview_label.configure(image=self._current_photo, text="")
+        self._current_preview_image = ctk.CTkImage(
+            light_image=img, dark_image=img, size=(320, 240),
+        )
+        self._preview_label.configure(image=self._current_preview_image, text="")
 
     def update_progress(self, count: int) -> None:
         """Met a jour la barre de progression."""
@@ -423,12 +464,6 @@ class PrankGuardGUI(ctk.CTk):
     4 onglets : Camera, Logs, Parametres, Enrollment.
     Theme sombre CustomTkinter.
     Raccourcis clavier : L (lock), P (pause), U (deblocage USB).
-
-    Utilisation :
-        gui = PrankGuardGUI()
-        gui.set_lock_callback(lock_fn)
-        gui.set_pause_callback(pause_fn)
-        gui.run()   # bloquant (mainloop)
     """
 
     def __init__(self) -> None:
@@ -493,6 +528,12 @@ class PrankGuardGUI(ctk.CTk):
             font=ctk.CTkFont(size=12),
         )
         self._phase_label.pack(side="left", padx=10)
+
+        self._level_label = ctk.CTkLabel(
+            self._bottom_bar, text="Niveau : VEILLE",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self._level_label.pack(side="left", padx=10)
 
         self._profile_label = ctk.CTkLabel(
             self._bottom_bar, text="Profil : --",
@@ -565,6 +606,17 @@ class PrankGuardGUI(ctk.CTk):
         """Met a jour l'affichage de la phase (VEILLE/ACTIVE)."""
         self._phase_label.configure(text=f"Phase : {phase}")
 
+    def update_level(self, level: str) -> None:
+        """Met a jour l'affichage du niveau d'escalade."""
+        colors = {
+            "VEILLE": "#6b7280",
+            "SOFT": "#22c55e",
+            "ALERTE": "#f97316",
+            "ACTIF": "#ef4444",
+        }
+        color = colors.get(level, "#6b7280")
+        self._level_label.configure(text=f"Niveau : {level}", text_color=color)
+
     def update_profile(self, profile: str) -> None:
         """Met a jour l'affichage du profil."""
         self._profile_label.configure(text=f"Profil : {profile}")
@@ -617,6 +669,7 @@ if __name__ == "__main__":
     gui.update_phase("VEILLE")
     gui.update_profile("BALANCED")
     gui.update_throttle("NORMAL")
+    gui.update_level("VEILLE")
 
     # Simuler un flux camera dans un thread
     def _fake_camera():
