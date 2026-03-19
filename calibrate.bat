@@ -1,3 +1,3 @@
 @echo off
-call venv\Scripts\activate.bat
+call venv312\Scripts\activate.bat
 python scripts/calibrate.py

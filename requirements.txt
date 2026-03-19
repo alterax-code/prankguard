@@ -1,7 +1,23 @@
+# PrankGuard - Dependencies
+# Python 3.12 required (mediapipe incompatible avec 3.13)
+
+# Core - Vision
 opencv-python>=4.8.0
-mediapipe>=0.10.0
+mediapipe==0.10.14
 face-recognition>=1.3.0
-numpy>=1.24.0
 dlib>=19.24.0
+numpy>=1.24.0
+
+# Core - Windows
+pywin32>=300
+wmi>=1.5.0
 keyboard>=0.13.5
+
+# GUI
+customtkinter>=5.2.0
 Pillow>=10.0.0
+
+# Prévu v2 - InsightFace
+insightface>=0.7.3
+onnxruntime-directml>=1.17.0
+pystray>=0.19.0

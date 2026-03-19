@@ -1,5 +1,27 @@
-﻿__pycache__/
-*.pyc
-data/owner_faces/encodings.pkl
-.env
+﻿# Virtual environments
 venv/
+venv*/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# PrankGuard data
+data/owner_faces/encodings.pkl
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+
+# PyInstaller / Inno Setup
+*.spec
+output/
