@@ -1,0 +1,23 @@
+dans le setting de l'application Prankguard :
+
+les "button" qui gere le verrouillage ou le deverouillage des ports usb ect ne sont pas réellement effective , ce n'est que visuel, par contre les "button" "enable all" et "disable all" on l'ai de plutôt fonctionné du moin pour les port usb c'est ok .
+
+idem pour les button activer desactiver pour les ecran imprimante ect je ne suis pas sur que cela sois effectif mais en tous cas se que je sais c'est que lorsque j'essaie de connecter le bluetooth du tel au pc le pc de verrouille mais la connexion bluetooth se fais quand meme j'aimerasi gerez tout les probleme de sécurité similaire sur mon application!
+
+les "button" qui active/desactive les parametre de securité doivent etre effectif.
+
+l'application quand on la lance peut importe le moyen doit absolument se lancer en admin !
+
+je souhaite avoir des "notification" qui me demande d'autorisé ou nom les connexion détecter je ne souhaite plus verrouiller le pc dirrectement lorsque un port se connecte mais je souhaite que lorsque un port se connecte epu importe internet imprimante usb ou autres la connexion sois bloqué le temp que je valide ou non je dois avoir une notif me signalant la connection avec les information liéé (type d'imprimate, de connection wifi, quel materiel usb , ect .
+
+optimiser le retour vidéo pour ne plus avoir cet effet saccadant sur le retour toujours analyser une fame sur x mais en rendu afficher noormalement pour que cela sois fluide.
+
+s'assurer que les "button" laptop/desktop sois reelemeent effectif idem pour les button peedago/secure ( je n'ai pas l'impression que cela fasse quoi que se soit quand je clique dessus , on dirais que c'est juste visuel, peut etre c'est lié au fait que l'app nest peut etre pas lancer en admin !
+
+les logs dans l'onglet logs de l'app n'affiche pas exactemeent se qui se passe on doit avoir toute les information necessaire du style "teentaive de connexion de x appareil avec x information .
+
+le "responsive" de l'app n'est optimal je n'ai pas tout qui s'affiche a l'encran en fonction des onglet je suis obliger de mettre l'app en pleine ecran pour corriger un peu le truc mais touhjours pas terrible .
+
+l'app annonce 0/10 ou 10/10 pour le nombre de photo dispo utilie ou autres ! je ne souhaite pas bloqué il faudrais au minimum 15 photo (il doit y avoir des petit tips lorsque l'on prend les photo pour la premiere fois sur comment bien prendre els photo pour rendre l'app optimal ) mais pas de max plus l'utilisateur en met mieux c'est peut etr eune limite raisonnable mais pas 10 !
+
+lorsque je met l'app en pause tout doit etre mis en pause a 100 % meme les touche "racourcit" qui permette de mettre l'app en pause ou autre !

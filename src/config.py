@@ -16,7 +16,7 @@ class Config:
     FPS: int = 15
 
     # Face Recognition
-    FACE_RECOGNITION_TOLERANCE: float = 0.6  # Lower = stricter (faux positifs préférés)
+    FACE_RECOGNITION_TOLERANCE: float = 0.3  # Lower = stricter (faux positifs préférés)
     MIN_FACE_SIZE_RATIO: float = 0.10  # Face must be at least 10% of frame height
 
     # Attention Detection

@@ -507,9 +507,9 @@ class PrankGuardApp(ctk.CTk):
         right_col = ctk.CTkFrame(det_frame, fg_color="transparent")
         right_col.pack(side="right", fill="both", expand=True, padx=10)
         
-        ctk.CTkLabel(right_col, text="Affichage & Réseau", font=ctk.CTkFont(size=13, weight="bold"), text_color="#9b59b6").pack(anchor="w", pady=(5,5))
+        ctk.CTkLabel(right_col, text="Affichage & R�seau", font=ctk.CTkFont(size=13, weight="bold"), text_color="#9b59b6").pack(anchor="w", pady=(5,5))
         ctk.CTkSwitch(right_col, text=" Moniteurs", variable=self.watch_monitors, command=self.on_toggle_change).pack(anchor="w", pady=3)
-        ctk.CTkSwitch(right_col, text=" Réseau", variable=self.watch_network, command=self.on_toggle_change).pack(anchor="w", pady=3)
+        ctk.CTkSwitch(right_col, text=" R�seau", variable=self.watch_network, command=self.on_toggle_change).pack(anchor="w", pady=3)
         ctk.CTkSwitch(right_col, text=" Bluetooth", variable=self.watch_bluetooth, command=self.on_toggle_change).pack(anchor="w", pady=3)
         ctk.CTkSwitch(right_col, text=" Audio", variable=self.watch_audio, command=self.on_toggle_change).pack(anchor="w", pady=3)
         
@@ -647,7 +647,7 @@ class PrankGuardApp(ctk.CTk):
                 for loc, enc in zip(locs, encs):
                     t, r, b, l = loc
                     d = min(face_recognition.face_distance(self.owner_encodings, enc))
-                    is_own = d <= 0.6
+                    is_own = d <= 0.45
                     sz = (b - t) / h
                     off = abs((l + r) / 2 - w / 2) / (w / 2)
                     look = sz >= self.MIN_FACE_SIZE and off <= self.CENTER_THRESHOLD
