@@ -25,3 +25,7 @@ data/owner_faces/encodings.pkl
 # PyInstaller / Inno Setup
 *.spec
 output/
+
+data/owner_faces/*.jpg
+data/owner_faces/*.png
+data/owner_faces/*.jpeg
