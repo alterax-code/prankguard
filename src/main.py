@@ -5,10 +5,22 @@ FIX 1 — Auto-elevation admin (UAC) pour le blocage USB/BT/réseau.
 import ctypes
 import sys
 import os
-
-# Patch face_recognition_models pour Python 3.12+ (pkg_resources deprecated)
-import face_recognition_models
+import types
 from pathlib import Path
+
+# Injecter un stub pkg_resources AVANT face_recognition_models pour supprimer la
+# DeprecationWarning de setuptools (Python 3.12+). Le stub fournit resource_filename
+# via importlib.util sans passer par pkg_resources.
+if "pkg_resources" not in sys.modules:
+    _pkg_stub = types.ModuleType("pkg_resources")
+    def _resource_filename(pkg, resource):
+        import importlib.util
+        spec = importlib.util.find_spec(pkg)
+        return str(Path(spec.origin).parent / resource) if (spec and spec.origin) else resource
+    _pkg_stub.resource_filename = _resource_filename
+    sys.modules["pkg_resources"] = _pkg_stub
+
+import face_recognition_models
 _models_dir = Path(face_recognition_models.__file__).parent / "models"
 face_recognition_models.pose_predictor_model_location = lambda: str(_models_dir / "shape_predictor_68_face_landmarks.dat")
 face_recognition_models.pose_predictor_five_point_model_location = lambda: str(_models_dir / "shape_predictor_5_face_landmarks.dat")

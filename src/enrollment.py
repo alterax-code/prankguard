@@ -11,7 +11,7 @@ import threading
 import winsound
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 from typing import Callable
 
 
@@ -157,11 +157,8 @@ class EnrollmentWindow(ctk.CTk):
 
             # Afficher dans la GUI
             img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).resize((480, 360))
-            imgtk = ImageTk.PhotoImage(image=img)
-            self.after(0, lambda i=imgtk: (
-                self.cam_label.configure(image=i, text=""),
-                setattr(self.cam_label, "image", i)
-            ))
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            self.after(0, lambda i=ctk_img: self.cam_label.configure(image=i, text=""))
             time.sleep(0.03)
 
         if self.cap:

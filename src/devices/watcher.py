@@ -88,10 +88,13 @@ class DeviceWatcher:
 
         ctypes.windll.user32.RegisterClassExW(ctypes.byref(wc))
 
-        # FIX 2 — restype + None au lieu de 0 (évite OverflowError)
+        # FIX 2 — restype + c_void_p(hInstance) + None pour pointeurs (évite OverflowError 64-bit)
+        # Sans argtypes, ctypes convertit les int Python en c_int (32-bit) → overflow sur handles 64-bit.
+        # ctypes.c_void_p() signale explicitement que c'est un pointeur.
         ctypes.windll.user32.CreateWindowExW.restype = ctypes.c_void_p
         self.hwnd = ctypes.windll.user32.CreateWindowExW(
-            0, "PrankGuardUSB", "USB", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None
+            0, "PrankGuardUSB", "USB", 0, 0, 0, 0, 0,
+            None, None, ctypes.c_void_p(wc.hInstance), None
         )
 
         if self.hwnd:
