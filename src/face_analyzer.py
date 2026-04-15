@@ -122,7 +122,7 @@ class FaceAnalyzer:
 
         if locs:
             encs = face_recognition.face_encodings(
-                rgb, known_face_locations=locs, num_jitters=1, model="small"
+                rgb, known_face_locations=locs, num_jitters=1, model="large"
             )
             for loc, enc in zip(locs, encs):
                 t, r, b, l = loc
