@@ -8,7 +8,7 @@ FIX 7 — Notifications device (popup au lieu de lock direct).
 FIX 9 — Layout responsive (grid + redimensionnement caméra).
 """
 import cv2
-import pickle
+import numpy as np
 import time
 import threading
 import winsound
@@ -42,8 +42,8 @@ class PrankGuardApp(ctk.CTk):
         self.minsize(900, 700)  # FIX 9 — taille minimale
 
         # Charger les encodings
-        with open(config.encodings_path, "rb") as f:
-            self.owner_encodings = pickle.load(f)
+        data = np.load(config.encodings_path, allow_pickle=False)
+        self.owner_encodings = list(data)
 
         # État global
         self.running = True
@@ -59,6 +59,7 @@ class PrankGuardApp(ctk.CTk):
             min_face_size=config.min_face_size,
             center_threshold=config.center_threshold,
             analyze_every_n=config.analyze_every_n_frames,
+            detection_scale=config.detection_scale,
         )
         self.state_machine = StateMachine(
             sec_mode=config.sec_mode,

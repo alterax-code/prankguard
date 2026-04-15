@@ -47,13 +47,19 @@ class Config:
     # Analyse vidéo (FIX 6)
     analyze_every_n_frames: int = 3
 
+    # Profil hardware (auto-détecté au démarrage si non configuré explicitement)
+    detection_scale: float = 0.33   # Facteur de downscale pour la détection (0.25–0.5)
+
     @classmethod
     def load(cls) -> "Config":
         """Charge la config depuis le fichier JSON, ou crée les défauts."""
+        explicit_keys: set = set()
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                # Clés présentes explicitement dans config.json
+                explicit_keys = set(data.keys())
                 # Merge avec les défauts (gère les nouvelles clés)
                 defaults = asdict(cls())
                 defaults.update(data)
@@ -76,6 +82,13 @@ class Config:
         # Clamp face_tolerance entre 0.1 et 0.9
         obj.face_tolerance = max(0.1, min(0.9, float(obj.face_tolerance)))
 
+        # Auto-profil hardware (si non configuré explicitement dans config.json)
+        every_n, scale = cls._hw_profile()
+        if "analyze_every_n_frames" not in explicit_keys:
+            obj.analyze_every_n_frames = every_n
+        if "detection_scale" not in explicit_keys:
+            obj.detection_scale = scale
+
         return obj
 
     def save(self):
@@ -90,3 +103,14 @@ class Config:
             if hasattr(self, k):
                 setattr(self, k, v)
         self.save()
+
+    @staticmethod
+    def _hw_profile() -> tuple:
+        """Retourne (analyze_every_n, detection_scale) selon le nombre de CPU logiques."""
+        cores = os.cpu_count() or 4
+        if cores >= 8:
+            return 2, 0.5     # HIGH — 8+ coeurs
+        elif cores >= 4:
+            return 3, 0.33    # MEDIUM — 4-7 coeurs
+        else:
+            return 5, 0.25    # LOW — moins de 4 coeurs

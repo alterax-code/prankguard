@@ -33,13 +33,15 @@ class FaceAnalyzer:
         tolerance: float = 0.45,
         min_face_size: float = 0.20,
         center_threshold: float = 0.35,
-        analyze_every_n: int = 3
+        analyze_every_n: int = 3,
+        detection_scale: float = 0.33,
     ):
         self.owner_encodings = owner_encodings
         self.tolerance = tolerance
         self.min_face_size = min_face_size
         self.center_threshold = center_threshold
         self.analyze_every_n = analyze_every_n
+        self.detection_scale = detection_scale
 
         self._frame_count = 0
         self._last_results: List[FaceResult] = []
@@ -62,11 +64,18 @@ class FaceAnalyzer:
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        locs = face_recognition.face_locations(rgb)
+        # Downscale pour la détection (plus rapide), encode sur frame full-res
+        s = self.detection_scale
+        small = cv2.resize(rgb, (0, 0), fx=s, fy=s)
+        locs_small = face_recognition.face_locations(small)
+        locs = [(int(t / s), int(r / s), int(b / s), int(l / s))
+                for t, r, b, l in locs_small]
         results = []
 
         if locs:
-            encs = face_recognition.face_encodings(rgb, locs)
+            encs = face_recognition.face_encodings(
+                rgb, known_face_locations=locs, num_jitters=1, model="small"
+            )
             for loc, enc in zip(locs, encs):
                 t, r, b, l = loc
                 dist = min(face_recognition.face_distance(self.owner_encodings, enc))
