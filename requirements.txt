@@ -7,3 +7,4 @@ Pillow>=10.0.0
 customtkinter>=5.2.0
 pywin32>=306
 wmi>=1.5.1
+setuptools<71

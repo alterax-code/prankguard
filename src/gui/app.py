@@ -14,7 +14,7 @@ import threading
 import winsound
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 from datetime import datetime
 
 from src.config import Config
@@ -571,11 +571,9 @@ class PrankGuardApp(ctk.CTk):
         except Exception:
             img = img.resize((640, 480))
 
-        imgtk = ImageTk.PhotoImage(image=img)
-        self.after(0, lambda i=imgtk: (
-            self.cam_label.configure(image=i, text=""),
-            setattr(self.cam_label, "image", i)
-        ))
+        # FIX 3 — CTkImage évite le warning PIL.ImageTk.PhotoImage
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+        self.after(0, lambda i=ctk_img: self.cam_label.configure(image=i, text=""))
 
     def _update_cooldowns(self):
         """Met à jour l'affichage des cooldowns dans le footer."""

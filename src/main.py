@@ -6,6 +6,15 @@ import ctypes
 import sys
 import os
 
+# Patch face_recognition_models pour Python 3.12+ (pkg_resources deprecated)
+import face_recognition_models
+from pathlib import Path
+_models_dir = Path(face_recognition_models.__file__).parent / "models"
+face_recognition_models.pose_predictor_model_location = lambda: str(_models_dir / "shape_predictor_68_face_landmarks.dat")
+face_recognition_models.pose_predictor_five_point_model_location = lambda: str(_models_dir / "shape_predictor_5_face_landmarks.dat")
+face_recognition_models.face_recognition_model_location = lambda: str(_models_dir / "dlib_face_recognition_resnet_model_v1.dat")
+face_recognition_models.cnn_face_detector_model_location = lambda: str(_models_dir / "mmod_human_face_detector.dat")
+
 
 def is_admin() -> bool:
     """Vérifie si le processus tourne en admin."""
