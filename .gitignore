@@ -13,6 +13,8 @@ dist/
 build/
 
 # PrankGuard data (photos + encodings = données personnelles)
+data/models/
+
 data/owner_faces/*.jpg
 data/owner_faces/*.png
 data/owner_faces/*.jpeg

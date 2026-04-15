@@ -2,12 +2,38 @@
 Analyse faciale avec optimisation frame skip.
 FIX 6 — Capture à 30fps, analyse 1 frame sur N, affiche tous les frames
          avec les rectangles du dernier résultat.
+Pipeline hybride : YuNet (détection rapide) + dlib (encodage), fallback dlib HOG.
 """
+import logging
+import os
+import urllib.request
 import cv2
 import face_recognition
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+YUNET_MODEL_PATH = os.path.join("data", "models", "yunet.onnx")
+YUNET_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/"
+    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
+
+
+def _ensure_yunet_model() -> Optional[str]:
+    """Télécharge yunet.onnx si absent. Retourne le chemin ou None en cas d'erreur."""
+    if os.path.exists(YUNET_MODEL_PATH):
+        return YUNET_MODEL_PATH
+    try:
+        os.makedirs(os.path.dirname(YUNET_MODEL_PATH), exist_ok=True)
+        logger.info("Telechargement modele YuNet...")
+        urllib.request.urlretrieve(YUNET_URL, YUNET_MODEL_PATH)
+        return YUNET_MODEL_PATH
+    except Exception as exc:
+        logger.warning("YuNet indisponible: %s — fallback dlib HOG", exc)
+        return None
 
 
 @dataclass
@@ -46,6 +72,24 @@ class FaceAnalyzer:
         self._frame_count = 0
         self._last_results: List[FaceResult] = []
 
+        # Détection YuNet (optionnelle — fallback dlib HOG si indisponible)
+        self._use_yunet = False
+        self._yunet = None
+        self._yunet_size = (0, 0)
+        model_path = _ensure_yunet_model()
+        if model_path:
+            try:
+                self._yunet = cv2.FaceDetectorYN.create(
+                    model_path, "", (320, 240),
+                    score_threshold=0.6,
+                    nms_threshold=0.3,
+                    top_k=5000,
+                )
+                self._use_yunet = True
+                logger.info("YuNet charge: %s", model_path)
+            except Exception as exc:
+                logger.warning("YuNet init echoue: %s — fallback dlib HOG", exc)
+
     @property
     def last_results(self) -> List[FaceResult]:
         """Dernier résultat d'analyse (pour l'affichage continu)."""
@@ -66,10 +110,14 @@ class FaceAnalyzer:
 
         # Downscale pour la détection (plus rapide), encode sur frame full-res
         s = self.detection_scale
-        small = cv2.resize(rgb, (0, 0), fx=s, fy=s)
-        locs_small = face_recognition.face_locations(small)
-        locs = [(int(t / s), int(r / s), int(b / s), int(l / s))
-                for t, r, b, l in locs_small]
+        if self._use_yunet:
+            small_bgr = cv2.resize(frame, (0, 0), fx=s, fy=s)
+            locs = self._detect_faces_yunet(small_bgr, s, h, w)
+        else:
+            small_rgb = cv2.resize(rgb, (0, 0), fx=s, fy=s)
+            locs_small = face_recognition.face_locations(small_rgb)
+            locs = [(int(t / s), int(r / s), int(b / s), int(l / s))
+                    for t, r, b, l in locs_small]
         results = []
 
         if locs:
@@ -95,6 +143,28 @@ class FaceAnalyzer:
 
         self._last_results = results
         return results
+
+    def _detect_faces_yunet(
+        self, small_bgr: np.ndarray, scale: float, orig_h: int, orig_w: int
+    ) -> List[Tuple[int, int, int, int]]:
+        """Détecte les visages via YuNet sur frame BGR réduit.
+        Retourne des locs (top, right, bottom, left) en coordonnées full-res."""
+        sh, sw = small_bgr.shape[:2]
+        if (sw, sh) != self._yunet_size:
+            self._yunet.setInputSize((sw, sh))
+            self._yunet_size = (sw, sh)
+        _, faces = self._yunet.detect(small_bgr)
+        if faces is None:
+            return []
+        locs = []
+        for face in faces:
+            x, y, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+            top = max(0, int(y / scale))
+            left = max(0, int(x / scale))
+            bottom = min(orig_h, int((y + fh) / scale))
+            right = min(orig_w, int((x + fw) / scale))
+            locs.append((top, right, bottom, left))
+        return locs
 
     def draw_on_frame(self, frame: np.ndarray) -> np.ndarray:
         """Dessine les rectangles et labels sur le frame (résultats en cache)."""
