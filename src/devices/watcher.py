@@ -1,6 +1,6 @@
 """
 Surveillance USB temps réel via fenêtre Win32 invisible (WM_DEVICECHANGE).
-FIX 2 — Fix ctypes OverflowError (restype c_void_p pour handles 64-bit).
+FIX 2 — Fix ctypes OverflowError (argtypes + restype complets, 64-bit safe).
 FIX 3 — Respect de self.paused dans _window_proc.
 """
 import ctypes
@@ -15,6 +15,67 @@ DBT_DEVICEARRIVAL = 0x8000
 DBT_DEVTYP_DEVICEINTERFACE = 5
 DEVICE_NOTIFY_WINDOW_HANDLE = 0
 GUID_DEVINTERFACE_USB_DEVICE = "{A5DCBF10-6530-11D2-901F-00C04FB951ED}"
+
+# ── Déclaration complète argtypes/restype (64-bit safe) ───────────────────────
+# Sans argtypes, ctypes convertit les int Python en c_int (32-bit) → OverflowError
+# sur les handles Windows 64-bit (HWND, WPARAM, LPARAM, LRESULT, HDEVNOTIFY…).
+_u32 = ctypes.windll.user32
+_k32 = ctypes.windll.kernel32
+
+_k32.GetModuleHandleW.restype = ctypes.c_void_p
+_k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+
+_u32.RegisterClassExW.restype = ctypes.c_ushort
+_u32.RegisterClassExW.argtypes = [ctypes.c_void_p]
+
+_u32.CreateWindowExW.restype = ctypes.c_void_p
+_u32.CreateWindowExW.argtypes = [
+    ctypes.c_ulong,    # dwExStyle
+    ctypes.c_wchar_p,  # lpClassName
+    ctypes.c_wchar_p,  # lpWindowName
+    ctypes.c_ulong,    # dwStyle
+    ctypes.c_int,      # X
+    ctypes.c_int,      # Y
+    ctypes.c_int,      # nWidth
+    ctypes.c_int,      # nHeight
+    ctypes.c_void_p,   # hWndParent
+    ctypes.c_void_p,   # hMenu
+    ctypes.c_void_p,   # hInstance
+    ctypes.c_void_p,   # lpParam
+]
+
+_u32.PeekMessageW.restype = ctypes.c_bool
+_u32.PeekMessageW.argtypes = [
+    ctypes.c_void_p,   # lpMsg
+    ctypes.c_void_p,   # hWnd
+    ctypes.c_uint,     # wMsgFilterMin
+    ctypes.c_uint,     # wMsgFilterMax
+    ctypes.c_uint,     # wRemoveMsg
+]
+
+_u32.TranslateMessage.restype = ctypes.c_bool
+_u32.TranslateMessage.argtypes = [ctypes.c_void_p]
+
+_u32.DispatchMessageW.restype = ctypes.c_void_p
+_u32.DispatchMessageW.argtypes = [ctypes.c_void_p]
+
+_u32.DefWindowProcW.restype = ctypes.c_void_p
+_u32.DefWindowProcW.argtypes = [
+    ctypes.c_void_p,   # hWnd (HWND)
+    ctypes.c_uint,     # Msg (UINT)
+    ctypes.c_void_p,   # wParam (WPARAM = UINT_PTR, 64-bit)
+    ctypes.c_void_p,   # lParam (LPARAM = LONG_PTR, 64-bit)
+]
+
+_u32.RegisterDeviceNotificationW.restype = ctypes.c_void_p
+_u32.RegisterDeviceNotificationW.argtypes = [
+    ctypes.c_void_p,   # hRecipient
+    ctypes.c_void_p,   # NotificationFilter
+    ctypes.c_ulong,    # Flags
+]
+
+_u32.UnregisterDeviceNotification.restype = ctypes.c_bool
+_u32.UnregisterDeviceNotification.argtypes = [ctypes.c_void_p]
 
 
 class GUID(ctypes.Structure):
@@ -53,9 +114,13 @@ class DeviceWatcher:
 
     def _run(self):
         """Boucle de messages Win32."""
+        # LRESULT = LONG_PTR = 64-bit sur Windows 64-bit → c_void_p (pas c_long)
         WNDPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.c_void_p, ctypes.c_uint,
-            ctypes.c_void_p, ctypes.c_void_p
+            ctypes.c_void_p,   # LRESULT
+            ctypes.c_void_p,   # hWnd
+            ctypes.c_uint,     # Msg
+            ctypes.c_void_p,   # wParam
+            ctypes.c_void_p,   # lParam
         )
 
         class WNDCLASSEX(ctypes.Structure):
@@ -82,30 +147,23 @@ class DeviceWatcher:
         wc.lpfnWndProc = self._wndproc
         wc.lpszClassName = "PrankGuardUSB"
 
-        # FIX 2 — Déclarer le restype AVANT l'appel (64-bit safe)
-        ctypes.windll.kernel32.GetModuleHandleW.restype = ctypes.c_void_p
-        wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
+        # argtypes/restype déclarés au niveau module — appels directs 64-bit safe
+        wc.hInstance = _k32.GetModuleHandleW(None)
 
-        ctypes.windll.user32.RegisterClassExW(ctypes.byref(wc))
+        _u32.RegisterClassExW(ctypes.byref(wc))
 
-        # FIX 2 — restype + c_void_p(hInstance) + None pour pointeurs (évite OverflowError 64-bit)
-        # Sans argtypes, ctypes convertit les int Python en c_int (32-bit) → overflow sur handles 64-bit.
-        # ctypes.c_void_p() signale explicitement que c'est un pointeur.
-        ctypes.windll.user32.CreateWindowExW.restype = ctypes.c_void_p
-        self.hwnd = ctypes.windll.user32.CreateWindowExW(
+        self.hwnd = _u32.CreateWindowExW(
             0, "PrankGuardUSB", "USB", 0, 0, 0, 0, 0,
-            None, None, ctypes.c_void_p(wc.hInstance), None
+            None, None, wc.hInstance, None
         )
 
         if self.hwnd:
             self._register_notification()
             msg = ctypes.wintypes.MSG()
             while self.running:
-                if ctypes.windll.user32.PeekMessageW(
-                    ctypes.byref(msg), self.hwnd, 0, 0, 1
-                ):
-                    ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-                    ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
+                if _u32.PeekMessageW(ctypes.byref(msg), self.hwnd, 0, 0, 1):
+                    _u32.TranslateMessage(ctypes.byref(msg))
+                    _u32.DispatchMessageW(ctypes.byref(msg))
                 time.sleep(0.01)
 
     def _register_notification(self):
@@ -126,7 +184,7 @@ class DeviceWatcher:
         dbdi.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE
         dbdi.dbcc_classguid = guid
 
-        self.hdev_notify = ctypes.windll.user32.RegisterDeviceNotificationW(
+        self.hdev_notify = _u32.RegisterDeviceNotificationW(
             self.hwnd, ctypes.byref(dbdi), DEVICE_NOTIFY_WINDOW_HANDLE
         )
 
@@ -136,10 +194,10 @@ class DeviceWatcher:
         if msg == WM_DEVICECHANGE and wparam == DBT_DEVICEARRIVAL:
             if self.enabled and not self.paused:
                 self.callback("USB")
-        return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        return _u32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def stop(self):
         """Arrête le watcher proprement."""
         self.running = False
         if self.hdev_notify:
-            ctypes.windll.user32.UnregisterDeviceNotification(self.hdev_notify)
+            _u32.UnregisterDeviceNotification(self.hdev_notify)
