@@ -20,6 +20,11 @@ data/owner_faces/*.png
 data/owner_faces/*.jpeg
 data/owner_faces/encodings.pkl
 data/owner_faces/encodings.npy
+data/owner_faces/authorized_users.npz
+
+# Logs d'intrusion (données personnelles)
+intrusion_log.txt
+*.log
 
 # Config locale
 .prankguard/
@@ -45,3 +50,6 @@ CLAUDE.md
 CLAUDE.local.md
 .claude/
 .claudeignore
+
+# Guides de développement internes
+GUIDE_CLAUDE_CODE_PRANKGUARD_v2.md

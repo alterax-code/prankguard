@@ -7,6 +7,7 @@ Usage : pyinstaller build_lite.spec --clean --noconfirm
 Ou     : build_lite.bat
 """
 from PyInstaller.utils.hooks import collect_data_files
+import os
 
 block_cipher = None
 
@@ -16,11 +17,17 @@ ctk_datas = collect_data_files('customtkinter')
 # Modèles dlib packagés via face_recognition_models (.dat — ~130 MB total)
 frm_datas = collect_data_files('face_recognition_models')
 
+# Modèle YuNet (téléchargé à la demande — inclus s'il est présent au moment du build)
+yunet_datas = []
+if os.path.exists(os.path.join('data', 'models', 'yunet.onnx')):
+    yunet_datas = [(os.path.join('data', 'models', 'yunet.onnx'),
+                    os.path.join('data', 'models'))]
+
 a = Analysis(
     ['run_app.py'],
     pathex=['.'],
     binaries=[],
-    datas=ctk_datas + frm_datas,
+    datas=ctk_datas + frm_datas + yunet_datas,
     hiddenimports=[
         # pywin32 — ctypes + WMI dans src/devices/
         'win32api', 'win32con', 'win32gui', 'win32process',
@@ -41,15 +48,32 @@ a = Analysis(
         'keyboard',
         # Stdlib Windows
         'winsound',
-        # Numpy (encodings .npy)
+        # Numpy (encodings .npz)
         'numpy', 'numpy.core', 'numpy.lib', 'numpy.random',
+        # Systray (Sprint 2 — Feature 1)
+        'pystray', 'pystray._win32',
+        # Chiffrement AES-256 (Sprint 2 — Feature 5)
+        'cryptography',
+        'cryptography.hazmat.primitives.ciphers.aead',
+        'cryptography.hazmat.primitives.kdf.pbkdf2',
+        'cryptography.hazmat.primitives.hashes',
+        'cryptography.hazmat.backends',
+        'cryptography.hazmat.backends.openssl',
+        'cryptography.hazmat.backends.openssl.backend',
+        # Modules src/ Sprint 2
+        'src.systray',
+        'src.anti_spoof',
+        'src.intrusion_report',
+        'src.email_alert',
+        'src.crypto',
+        'src.watchdog',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # Exclure les gros packages scientifiques qui peuvent être tirés transitoirement
     excludes=['matplotlib', 'scipy', 'pandas', 'IPython', 'notebook',
-              'pytest', 'setuptools'],
+              'pytest', 'setuptools', 'mediapipe'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
