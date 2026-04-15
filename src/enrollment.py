@@ -106,6 +106,7 @@ class EnrollmentWindow(ctk.CTk):
         self.encodings = []
         self.cap = None
         self.running = True
+        self._closing = False  # Guard contre les callbacks .after() post-destroy
         self.photo_count = 0
         self.current_frame = None
 
@@ -204,10 +205,15 @@ class EnrollmentWindow(ctk.CTk):
             for (t, r, b, l) in face_recognition.face_locations(rgb):
                 cv2.rectangle(frame, (l, t), (r, b), (0, 255, 0), 2)
 
-            # Afficher dans la GUI
+            # Afficher dans la GUI (guard : ne pas appeler après destroy)
+            if self._closing:
+                break
             img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).resize((480, 360))
             ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-            self.after(0, lambda i=ctk_img: self.cam_label.configure(image=i, text=""))
+            self.after(0, lambda i=ctk_img: (
+                self.cam_label.configure(image=i, text="")
+                if not self._closing else None
+            ))
             time.sleep(0.03)
 
         if self.cap:
@@ -281,6 +287,7 @@ class EnrollmentWindow(ctk.CTk):
         with open(self.encodings_path, "wb") as f:
             f.write(raw_out)
 
+        self._closing = True
         self.running = False
         time.sleep(0.3)
         self.destroy()
@@ -288,6 +295,7 @@ class EnrollmentWindow(ctk.CTk):
 
     def _on_close(self):
         """Fermeture propre."""
+        self._closing = True
         self.running = False
         time.sleep(0.2)
         self.destroy()
