@@ -23,6 +23,7 @@ from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
 from src.anti_spoof import AntiSpoof
+from src.intrusion_report import IntrusionReporter, IntrusionType, Criticality
 from src.state_machine import StateMachine, State, STATE_COLORS
 from src.security.locker import Locker
 from src.devices.watcher import DeviceWatcher
@@ -88,6 +89,10 @@ class PrankGuardApp(ctk.CTk):
 
         # Protection anti-fermeture
         self._close_protection_var = ctk.BooleanVar(value=config.close_protection_enabled)
+
+        # Rapport d'intrusion
+        self._reporter = IntrusionReporter(config.intrusion_log_path)
+        self._intrusion_active: bool = False
 
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
@@ -449,6 +454,24 @@ class PrankGuardApp(ctk.CTk):
         self.config.update(close_protection_password_hash=h)
         logger.toggle("Mot de passe de protection modifié")
 
+    def _log_intrusion_event(self, event):
+        """Affiche un résumé d'intrusion dans le log GUI."""
+        crit_colors = {
+            Criticality.INFO:     "[INFO]",
+            Criticality.WARNING:  "[WARNING]",
+            Criticality.CRITICAL: "[CRITICAL]",
+        }
+        prefix = crit_colors.get(event.criticality, "[?]")
+        msg = (f"{prefix} Intrusion {event.intrusion_type.value} "
+               f"— {event.duration:.1f}s")
+        if event.devices_plugged:
+            msg += f" | devices: {', '.join(event.devices_plugged)}"
+        if event.spoof_detected:
+            msg += " | SPOOF"
+        if event.pending_email:
+            msg += " | [email Sprint 2]"
+        logger.warning(msg) if event.criticality != Criticality.INFO else logger.info(msg)
+
     def _start_alarm(self):
         """Démarre l'alarme sonore dans un thread daemon."""
         if self._alarm_active:
@@ -554,6 +577,9 @@ class PrankGuardApp(ctk.CTk):
             block_network()
 
         logger.device(f"Connexion {device_type} détectée : {device_info} — EN ATTENTE")
+        # Notifier le rapport d'intrusion si une intrusion est en cours
+        if self._intrusion_active:
+            self._reporter.update_current(device=f"{device_type}:{device_info}")
 
         # Afficher la notification sur le main thread
         self.after(0, lambda: self._show_device_notification(device_type, device_info))
@@ -709,6 +735,33 @@ class PrankGuardApp(ctk.CTk):
                     if self._alarm_active:
                         self._stop_alarm()
 
+                # Rapport d'intrusion
+                intrusion_states = (State.THREAT, State.SURFER)
+                if result["state"] in intrusion_states:
+                    itype = (IntrusionType.UNKNOWN_FACE if result["state"] == State.THREAT
+                             else IntrusionType.SHOULDER_SURF)
+                    if not self._intrusion_active:
+                        self._reporter.start_intrusion(itype)
+                        self._intrusion_active = True
+                    else:
+                        # Mise à jour distance + spoof
+                        threats = [r for r in self.face_analyzer.last_results if not r.is_owner]
+                        dist = min((r.distance for r in threats), default=None)
+                        spoof = (self._anti_spoof_var.get()
+                                 and self._anti_spoof.spoof_suspect)
+                        if result["should_lock"]:
+                            self._reporter.update_current(
+                                face_distance=dist, spoof=spoof, action="LOCK"
+                            )
+                        else:
+                            self._reporter.update_current(face_distance=dist, spoof=spoof)
+                else:
+                    if self._intrusion_active:
+                        self._intrusion_active = False
+                        event = self._reporter.end_intrusion()
+                        if event:
+                            self.after(0, lambda e=event: self._log_intrusion_event(e))
+
             # Dessiner les rectangles (résultats en cache) et afficher
             frame = self.face_analyzer.draw_on_frame(frame)
             self._display_frame(frame)
@@ -851,6 +904,10 @@ class PrankGuardApp(ctk.CTk):
         self._closing = True
         self.running = False
         self._alarm_active = False  # Arrêter l'alarme si active
+        # Clôturer l'intrusion en cours si applicable
+        if self._intrusion_active:
+            self._intrusion_active = False
+            self._reporter.end_intrusion()
         # Écrire le flag watchdog avant la destruction
         try:
             flag_dir = os.path.join(os.path.expanduser("~"), ".prankguard")

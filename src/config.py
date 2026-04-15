@@ -56,6 +56,7 @@ class Config:
     sound_alarm_enabled: bool = False
     close_protection_enabled: bool = False
     close_protection_password_hash: str = ""
+    intrusion_log_path: str = "intrusion_log.txt"
 
     @classmethod
     def load(cls) -> "Config":
