@@ -78,6 +78,12 @@ class PrankGuardApp(ctk.CTk):
         self._anti_spoof = AntiSpoof()
         self._anti_spoof_var = ctk.BooleanVar(value=config.anti_spoof_enabled)
 
+        # Alarme sonore
+        self._alarm_active: bool = False
+        self._alarm_thread: threading.Thread = None
+        self._alarm_var = ctk.BooleanVar(value=config.sound_alarm_enabled)
+        self._threat_start: float = None  # Timestamp début état THREAT
+
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
         self.watch_usb_hid = ctk.BooleanVar(value=config.watch_usb_hid)
@@ -313,6 +319,10 @@ class PrankGuardApp(ctk.CTk):
             scroll, text="Anti-spoofing (détection de blink)",
             variable=self._anti_spoof_var, command=self._on_anti_spoof_toggle
         ).pack(anchor="w", padx=40, pady=3)
+        ctk.CTkSwitch(
+            scroll, text="Alarme sonore (mode SECURE, intrusion >3s)",
+            variable=self._alarm_var, command=self._on_alarm_toggle
+        ).pack(anchor="w", padx=40, pady=3)
 
         # Bouton re-enrollment
         ctk.CTkButton(
@@ -346,6 +356,12 @@ class PrankGuardApp(ctk.CTk):
             ftr, text="LOCK", width=70, fg_color="#e74c3c",
             command=lambda: self.locker.do_lock("Manuel")
         ).pack(side="right", padx=5, pady=10)
+        self.stop_alarm_btn = ctk.CTkButton(
+            ftr, text="Stop alarme", width=90, fg_color="#8e44ad",
+            command=self._stop_alarm
+        )
+        self.stop_alarm_btn.pack(side="right", padx=5, pady=10)
+        self.stop_alarm_btn.pack_forget()  # Masqué par défaut
         self.pause_btn = ctk.CTkButton(
             ftr, text="PAUSE", width=70, fg_color="#f39c12",
             command=self._toggle_pause
@@ -390,6 +406,42 @@ class PrankGuardApp(ctk.CTk):
         if not enabled:
             self.after(0, lambda: self.spoof_lbl.configure(text=""))
         logger.toggle(f"Anti-spoofing {'ACTIVÉ' if enabled else 'DÉSACTIVÉ'}")
+
+    def _on_alarm_toggle(self):
+        """Active/désactive l'alarme sonore."""
+        enabled = self._alarm_var.get()
+        self.config.update(sound_alarm_enabled=enabled)
+        if not enabled:
+            self._stop_alarm()
+        logger.toggle(f"Alarme sonore {'ACTIVÉE' if enabled else 'DÉSACTIVÉE'}")
+
+    def _start_alarm(self):
+        """Démarre l'alarme sonore dans un thread daemon."""
+        if self._alarm_active:
+            return
+        self._alarm_active = True
+        self.after(0, lambda: self.stop_alarm_btn.pack(side="right", padx=5, pady=10))
+        logger.warning("Alarme sonore déclenchée — intrusion SECURE >3s")
+        self._alarm_thread = threading.Thread(target=self._alarm_loop, daemon=True)
+        self._alarm_thread.start()
+
+    def _stop_alarm(self):
+        """Arrête l'alarme sonore et réinitialise le timer de menace."""
+        if not self._alarm_active:
+            return
+        self._alarm_active = False
+        self._threat_start = None
+        self.after(0, lambda: self.stop_alarm_btn.pack_forget())
+        logger.toggle("Alarme sonore arrêtée")
+
+    def _alarm_loop(self):
+        """Boucle de l'alarme (thread daemon) — bip 2500 Hz jusqu'à arrêt."""
+        while self._alarm_active:
+            try:
+                winsound.Beep(2500, 500)
+            except Exception:
+                pass
+            time.sleep(0.1)
 
     def _on_toggle_change(self):
         """Met à jour les toggles + cooldown 5s."""
@@ -608,6 +660,21 @@ class PrankGuardApp(ctk.CTk):
                 else:
                     self.after(0, lambda: self.spoof_lbl.configure(text=""))
 
+                # Alarme sonore : SECURE + activée + THREAT depuis >3s
+                if result["state"] == "THREAT":
+                    if self._threat_start is None:
+                        self._threat_start = time.time()
+                    elapsed = time.time() - self._threat_start
+                    if (self._alarm_var.get()
+                            and self.config.sec_mode == "SECURE"
+                            and not self._alarm_active
+                            and elapsed >= 3.0):
+                        self._start_alarm()
+                else:
+                    self._threat_start = None
+                    if self._alarm_active:
+                        self._stop_alarm()
+
             # Dessiner les rectangles (résultats en cache) et afficher
             frame = self.face_analyzer.draw_on_frame(frame)
             self._display_frame(frame)
@@ -728,6 +795,7 @@ class PrankGuardApp(ctk.CTk):
         """Fermeture propre de l'application."""
         self._closing = True
         self.running = False
+        self._alarm_active = False  # Arrêter l'alarme si active
         self.usb_watcher.stop()
         self.poll_watcher.stop()
         self.locker.do_unlock()

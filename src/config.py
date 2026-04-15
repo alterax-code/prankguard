@@ -52,6 +52,7 @@ class Config:
 
     # Fonctionnalités avancées
     anti_spoof_enabled: bool = False
+    sound_alarm_enabled: bool = False
 
     @classmethod
     def load(cls) -> "Config":
