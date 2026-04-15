@@ -45,6 +45,33 @@ def elevate():
     sys.exit(0)
 
 
+def _migrate_pkl_to_npy(encodings_path: str) -> None:
+    """Convertit encodings.pkl → encodings.npy si le .pkl existe encore."""
+    pkl_path = encodings_path.replace(".npy", ".pkl")
+    if not Path(pkl_path).exists():
+        return
+    if Path(encodings_path).exists():
+        # .npy déjà présent — supprimer le .pkl orphelin
+        Path(pkl_path).unlink(missing_ok=True)
+        return
+    try:
+        import pickle
+        import numpy as np
+        with open(pkl_path, "rb") as f:
+            data = pickle.load(f)
+        # data peut être list[ndarray] ou ndarray 2D
+        if isinstance(data, list):
+            arr = np.array(data) if data else np.empty((0, 128), dtype=np.float64)
+        else:
+            arr = np.array(data)
+        os.makedirs(os.path.dirname(encodings_path), exist_ok=True)
+        np.save(encodings_path, arr)
+        Path(pkl_path).unlink(missing_ok=True)
+        print(f"[PrankGuard] Migration encodings.pkl → .npy ({len(arr)} encodings)")
+    except Exception as e:
+        print(f"[PrankGuard] Avertissement migration pkl: {e}")
+
+
 def main():
     """Lancement principal : admin check → enrollment check → app."""
     # FIX 1 — Demander les droits admin si pas déjà admin
@@ -62,6 +89,9 @@ def main():
     ctk.set_default_color_theme("blue")
 
     config = Config.load()
+
+    # Migration rétrocompat pkl → npy au premier lancement
+    _migrate_pkl_to_npy(config.encodings_path)
 
     if not check_enrollment(config.encodings_path):
         # Lancer l'enrollment puis l'app

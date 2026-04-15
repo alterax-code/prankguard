@@ -3,10 +3,14 @@ Blocage de périphériques via registre Windows et services.
 FIX 7 — Blocage effectif BT (service bthserv) et réseau (netsh).
 FIX 5 — Mode DESKTOP (USBSTOR seul) vs LAPTOP (tout USB).
 """
+import re
 import subprocess
 from typing import Optional
 
 from src.logger import logger
+
+# Whitelist: lettres, chiffres, espaces, tirets, points, underscores
+_IFACE_RE = re.compile(r'^[\w\s\-\.]+$')
 
 # Flag pour masquer la fenêtre cmd
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW
@@ -96,6 +100,9 @@ def block_network(interface_name: Optional[str] = None):
     Si aucun nom n'est donné, désactive toutes les interfaces connectées.
     """
     if interface_name:
+        if not _IFACE_RE.match(interface_name):
+            logger.error(f"Nom d'interface invalide refusé: {interface_name!r}")
+            return
         _run_cmd(
             ["netsh", "interface", "set", "interface", interface_name, "admin=disable"],
             f"disable réseau {interface_name}"
@@ -113,6 +120,9 @@ def block_network(interface_name: Optional[str] = None):
                     parts = line.split()
                     if len(parts) >= 4:
                         name = " ".join(parts[3:])
+                        if not _IFACE_RE.match(name):
+                            logger.error(f"Nom d'interface invalide ignoré: {name!r}")
+                            continue
                         _run_cmd(
                             ["netsh", "interface", "set", "interface", name, "admin=disable"],
                             f"disable réseau {name}"
@@ -125,6 +135,9 @@ def block_network(interface_name: Optional[str] = None):
 def unblock_network(interface_name: Optional[str] = None):
     """Réactive une interface réseau."""
     if interface_name:
+        if not _IFACE_RE.match(interface_name):
+            logger.error(f"Nom d'interface invalide refusé: {interface_name!r}")
+            return
         _run_cmd(
             ["netsh", "interface", "set", "interface", interface_name, "admin=enable"],
             f"enable réseau {interface_name}"

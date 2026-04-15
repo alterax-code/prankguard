@@ -5,7 +5,7 @@ FIX 10 — Minimum 15 photos, tips dynamiques, barre de progression sur 30.
 import os
 import cv2
 import face_recognition
-import pickle
+import numpy as np
 import time
 import threading
 import winsound
@@ -43,9 +43,8 @@ def check_enrollment(encodings_path: str) -> bool:
     if not os.path.exists(encodings_path):
         return False
     try:
-        with open(encodings_path, "rb") as f:
-            data = pickle.load(f)
-            return len(data) > 0
+        data = np.load(encodings_path, allow_pickle=False)
+        return len(data) > 0
     except Exception:
         return False
 
@@ -70,9 +69,9 @@ class EnrollmentWindow(ctk.CTk):
         # Charger les encodings existants si présents
         if os.path.exists(self.encodings_path):
             try:
-                with open(self.encodings_path, "rb") as f:
-                    self.encodings = pickle.load(f)
-                    self.photo_count = len(self.encodings)
+                data = np.load(self.encodings_path, allow_pickle=False)
+                self.encodings = list(data)
+                self.photo_count = len(self.encodings)
             except Exception:
                 pass
 
@@ -203,8 +202,8 @@ class EnrollmentWindow(ctk.CTk):
     def _finish(self):
         """Sauvegarde les encodings et lance l'app."""
         os.makedirs(os.path.dirname(self.encodings_path), exist_ok=True)
-        with open(self.encodings_path, "wb") as f:
-            pickle.dump(self.encodings, f)
+        arr = np.array(self.encodings) if self.encodings else np.empty((0, 128), dtype=np.float64)
+        np.save(self.encodings_path, arr)
 
         self.running = False
         time.sleep(0.3)

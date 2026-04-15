@@ -17,6 +17,7 @@ data/owner_faces/*.jpg
 data/owner_faces/*.png
 data/owner_faces/*.jpeg
 data/owner_faces/encodings.pkl
+data/owner_faces/encodings.npy
 
 # Config locale
 .prankguard/
@@ -36,3 +37,8 @@ output/
 # OS
 Thumbs.db
 .DS_Store
+
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.claudeignore

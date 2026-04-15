@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".prankguard")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-DEFAULT_ENCODINGS = os.path.join("data", "owner_faces", "encodings.pkl")
+DEFAULT_ENCODINGS = os.path.join("data", "owner_faces", "encodings.npy")
 
 
 @dataclass
@@ -57,10 +57,26 @@ class Config:
                 # Merge avec les défauts (gère les nouvelles clés)
                 defaults = asdict(cls())
                 defaults.update(data)
-                return cls(**{k: v for k, v in defaults.items() if k in cls.__dataclass_fields__})
+                obj = cls(**{k: v for k, v in defaults.items() if k in cls.__dataclass_fields__})
             except Exception:
-                pass
-        return cls()
+                obj = cls()
+        else:
+            obj = cls()
+
+        # Migration chemin .pkl → .npy
+        if obj.encodings_path.endswith(".pkl"):
+            obj.encodings_path = obj.encodings_path[:-4] + ".npy"
+
+        # Validation usb_mode / sec_mode (whitelist)
+        if obj.usb_mode not in {"DESKTOP", "LAPTOP"}:
+            obj.usb_mode = "DESKTOP"
+        if obj.sec_mode not in {"PEDAGO", "SECURE"}:
+            obj.sec_mode = "PEDAGO"
+
+        # Clamp face_tolerance entre 0.1 et 0.9
+        obj.face_tolerance = max(0.1, min(0.9, float(obj.face_tolerance)))
+
+        return obj
 
     def save(self):
         """Sauvegarde la config en JSON."""
