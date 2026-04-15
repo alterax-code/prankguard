@@ -50,6 +50,9 @@ class Config:
     # Profil hardware (auto-détecté au démarrage si non configuré explicitement)
     detection_scale: float = 0.33   # Facteur de downscale pour la détection (0.25–0.5)
 
+    # Fonctionnalités avancées
+    anti_spoof_enabled: bool = False
+
     @classmethod
     def load(cls) -> "Config":
         """Charge la config depuis le fichier JSON, ou crée les défauts."""

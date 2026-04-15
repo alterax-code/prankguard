@@ -20,6 +20,7 @@ from datetime import datetime
 from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
+from src.anti_spoof import AntiSpoof
 from src.state_machine import StateMachine, State, STATE_COLORS
 from src.security.locker import Locker
 from src.devices.watcher import DeviceWatcher
@@ -72,6 +73,10 @@ class PrankGuardApp(ctk.CTk):
             usb_mode=config.usb_mode,
             lock_cooldown=config.lock_cooldown,
         )
+
+        # Anti-spoofing
+        self._anti_spoof = AntiSpoof()
+        self._anti_spoof_var = ctk.BooleanVar(value=config.anti_spoof_enabled)
 
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
@@ -155,6 +160,12 @@ class PrankGuardApp(ctk.CTk):
             info_bar, text="--", font=ctk.CTkFont(size=14)
         )
         self.face_info.pack(side="left", padx=20, pady=10)
+        # Indicateur anti-spoofing (masqué si désactivé)
+        self.spoof_lbl = ctk.CTkLabel(
+            info_bar, text="",
+            font=ctk.CTkFont(size=13), text_color="#f39c12"
+        )
+        self.spoof_lbl.pack(side="left", padx=10, pady=10)
         self.countdown_label = ctk.CTkLabel(
             info_bar, text="",
             font=ctk.CTkFont(size=18, weight="bold"), text_color="#e74c3c"
@@ -293,6 +304,16 @@ class PrankGuardApp(ctk.CTk):
         self.delay_slider.set(self.config.threat_lock_delay)
         self.delay_slider.pack(side="right", expand=True, fill="x", padx=(20, 0))
 
+        # Fonctionnalités avancées
+        ctk.CTkLabel(
+            scroll, text="Fonctionnalités avancées",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(20, 5))
+        ctk.CTkSwitch(
+            scroll, text="Anti-spoofing (détection de blink)",
+            variable=self._anti_spoof_var, command=self._on_anti_spoof_toggle
+        ).pack(anchor="w", padx=40, pady=3)
+
         # Bouton re-enrollment
         ctk.CTkButton(
             scroll, text="Ré-enregistrer le visage",
@@ -360,6 +381,15 @@ class PrankGuardApp(ctk.CTk):
         self.state_machine.threat_lock_delay = v
         self.config.update(threat_lock_delay=v)
         self.delay_label.configure(text=f"Délai de lock: {v:.1f}s")
+
+    def _on_anti_spoof_toggle(self):
+        """Active/désactive l'anti-spoofing et réinitialise l'état."""
+        enabled = self._anti_spoof_var.get()
+        self.config.update(anti_spoof_enabled=enabled)
+        self._anti_spoof.reset()
+        if not enabled:
+            self.after(0, lambda: self.spoof_lbl.configure(text=""))
+        logger.toggle(f"Anti-spoofing {'ACTIVÉ' if enabled else 'DÉSACTIVÉ'}")
 
     def _on_toggle_change(self):
         """Met à jour les toggles + cooldown 5s."""
@@ -553,6 +583,30 @@ class PrankGuardApp(ctk.CTk):
                     self.locker.set_device_cooldown(5.0)
                     self.poll_watcher.reset_baselines()
                     self.after(0, self._update_usb_label)
+
+                # Anti-spoofing : analyser uniquement si activé et owner présent
+                if self._anti_spoof_var.get():
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    owner_faces = [r for r in self.face_analyzer.last_results if r.is_owner]
+                    if owner_faces:
+                        spoof_result = self._anti_spoof.update(rgb, owner_faces[0].location)
+                        if spoof_result["spoof_suspect"]:
+                            spoof_txt = f"SPOOF? EAR:{spoof_result['ear']}"
+                            self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
+                                text=t, text_color="#e74c3c"
+                            ))
+                            logger.warning(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
+                        else:
+                            spoof_txt = f"LIVE blinks:{spoof_result['blink_count']}"
+                            self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
+                                text=t, text_color="#2ecc71"
+                            ))
+                    else:
+                        # Owner perdu → reset état blink
+                        self._anti_spoof.reset()
+                        self.after(0, lambda: self.spoof_lbl.configure(text=""))
+                else:
+                    self.after(0, lambda: self.spoof_lbl.configure(text=""))
 
             # Dessiner les rectangles (résultats en cache) et afficher
             frame = self.face_analyzer.draw_on_frame(frame)
