@@ -61,6 +61,14 @@ class Config:
     # Mode stealth (Sprint 2 — Feature 2)
     stealth_mode: bool = False
 
+    # Alertes email SMTP (Sprint 2 — Feature 4)
+    email_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password_b64: str = ""
+    smtp_recipient: str = ""
+
     @classmethod
     def load(cls) -> "Config":
         """Charge la config depuis le fichier JSON, ou crée les défauts."""

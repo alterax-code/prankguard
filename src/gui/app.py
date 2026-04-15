@@ -26,6 +26,7 @@ from src.systray import SystrayIcon
 from src.enrollment import load_authorized_users, save_authorized_users
 from src.anti_spoof import AntiSpoof
 from src.intrusion_report import IntrusionReporter, IntrusionType, Criticality
+from src.email_alert import EmailAlerter
 from src.state_machine import StateMachine, State, STATE_COLORS
 from src.security.locker import Locker
 from src.devices.watcher import DeviceWatcher
@@ -94,6 +95,16 @@ class PrankGuardApp(ctk.CTk):
         # Rapport d'intrusion
         self._reporter = IntrusionReporter(config.intrusion_log_path)
         self._intrusion_active: bool = False
+
+        # Alertes email SMTP (Sprint 2 — Feature 4)
+        self._email_alerter = EmailAlerter(
+            smtp_host=config.smtp_host,
+            smtp_port=config.smtp_port,
+            smtp_user=config.smtp_user,
+            smtp_password_b64=config.smtp_password_b64,
+            recipient=config.smtp_recipient,
+        )
+        self._email_var = ctk.BooleanVar(value=config.email_enabled)
 
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
@@ -362,6 +373,58 @@ class PrankGuardApp(ctk.CTk):
             variable=self._stealth_var, command=self._on_stealth_toggle
         ).pack(anchor="w", padx=40, pady=3)
 
+        # Alertes email SMTP (Sprint 2 — Feature 4)
+        ctk.CTkLabel(
+            scroll, text="Alertes email (CRITICAL)",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(20, 5))
+        ctk.CTkSwitch(
+            scroll, text="Activer les alertes email pour événements CRITICAL",
+            variable=self._email_var, command=self._on_email_toggle
+        ).pack(anchor="w", padx=40, pady=3)
+
+        smtp_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        smtp_frame.pack(fill="x", padx=40, pady=5)
+
+        # Ligne 1 : host + port
+        row1 = ctk.CTkFrame(smtp_frame, fg_color="transparent")
+        row1.pack(fill="x", pady=2)
+        ctk.CTkLabel(row1, text="Serveur SMTP:", width=120, anchor="w").pack(side="left")
+        self._smtp_host_var = ctk.StringVar(value=self.config.smtp_host)
+        ctk.CTkEntry(row1, textvariable=self._smtp_host_var, width=220,
+                     placeholder_text="smtp.gmail.com").pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="Port:", width=40, anchor="w").pack(side="left", padx=(10, 0))
+        self._smtp_port_var = ctk.StringVar(value=str(self.config.smtp_port))
+        ctk.CTkEntry(row1, textvariable=self._smtp_port_var, width=60).pack(side="left", padx=5)
+
+        # Ligne 2 : user + mot de passe
+        row2 = ctk.CTkFrame(smtp_frame, fg_color="transparent")
+        row2.pack(fill="x", pady=2)
+        ctk.CTkLabel(row2, text="Utilisateur:", width=120, anchor="w").pack(side="left")
+        self._smtp_user_var = ctk.StringVar(value=self.config.smtp_user)
+        ctk.CTkEntry(row2, textvariable=self._smtp_user_var, width=290,
+                     placeholder_text="user@gmail.com").pack(side="left", padx=5)
+
+        row3 = ctk.CTkFrame(smtp_frame, fg_color="transparent")
+        row3.pack(fill="x", pady=2)
+        ctk.CTkLabel(row3, text="Mot de passe:", width=120, anchor="w").pack(side="left")
+        self._smtp_pwd_var = ctk.StringVar(value="")
+        ctk.CTkEntry(row3, textvariable=self._smtp_pwd_var, width=290, show="*",
+                     placeholder_text="(inchangé si vide)").pack(side="left", padx=5)
+
+        # Ligne 3 : destinataire
+        row4 = ctk.CTkFrame(smtp_frame, fg_color="transparent")
+        row4.pack(fill="x", pady=2)
+        ctk.CTkLabel(row4, text="Destinataire:", width=120, anchor="w").pack(side="left")
+        self._smtp_rcpt_var = ctk.StringVar(value=self.config.smtp_recipient)
+        ctk.CTkEntry(row4, textvariable=self._smtp_rcpt_var, width=290,
+                     placeholder_text="alert@example.com").pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            scroll, text="Enregistrer config SMTP", width=200, fg_color="#2980b9",
+            command=self._save_smtp_config
+        ).pack(anchor="w", padx=40, pady=(4, 8))
+
         # Gestion des utilisateurs (Sprint 2 — multi-utilisateurs)
         ctk.CTkLabel(
             scroll, text="Gestion des utilisateurs",
@@ -478,6 +541,42 @@ class PrankGuardApp(ctk.CTk):
         self.config.update(stealth_mode=enabled)
         logger.toggle(f"Mode stealth {'ACTIVÉ' if enabled else 'DÉSACTIVÉ'}")
 
+    def _on_email_toggle(self):
+        """Active/désactive les alertes email CRITICAL."""
+        enabled = self._email_var.get()
+        self.config.update(email_enabled=enabled)
+        logger.toggle(f"Alertes email {'ACTIVÉES' if enabled else 'DÉSACTIVÉES'}")
+
+    def _save_smtp_config(self):
+        """Sauvegarde la configuration SMTP dans config.json."""
+        host = self._smtp_host_var.get().strip()
+        user = self._smtp_user_var.get().strip()
+        rcpt = self._smtp_rcpt_var.get().strip()
+        plain_pwd = self._smtp_pwd_var.get()
+
+        # Conserver l'ancien mot de passe si le champ est vide
+        pwd_b64 = (
+            EmailAlerter.encode_password(plain_pwd)
+            if plain_pwd
+            else self.config.smtp_password_b64
+        )
+
+        try:
+            port = int(self._smtp_port_var.get())
+        except ValueError:
+            port = 587
+
+        self.config.update(
+            smtp_host=host,
+            smtp_port=port,
+            smtp_user=user,
+            smtp_password_b64=pwd_b64,
+            smtp_recipient=rcpt,
+        )
+        self._email_alerter.reconfigure(host, port, user, pwd_b64, rcpt)
+        self._smtp_pwd_var.set("")  # Vider le champ mot de passe après sauvegarde
+        logger.toggle("Configuration SMTP sauvegardée")
+
     def _change_password(self):
         """Dialogue pour changer le mot de passe de protection."""
         dialog = ctk.CTkInputDialog(
@@ -507,8 +606,9 @@ class PrankGuardApp(ctk.CTk):
             msg += f" | devices: {', '.join(event.devices_plugged)}"
         if event.spoof_detected:
             msg += " | SPOOF"
-        if event.pending_email:
-            msg += " | [email Sprint 2]"
+        if event.pending_email and self.config.email_enabled:
+            sent = self._email_alerter.send_critical_alert(event)
+            msg += " | EMAIL" if sent else " | EMAIL (rate-limit)"
         logger.warning(msg) if event.criticality != Criticality.INFO else logger.info(msg)
 
     def _start_alarm(self):
