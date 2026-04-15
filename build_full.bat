@@ -1,25 +1,24 @@
 @echo off
 setlocal EnableDelayedExpansion
-chcp 65001 > nul
-title PrankGuard — Build Full (Inno Setup)
+title PrankGuard - Build Full (Inno Setup)
 
 echo ============================================
-echo  PrankGuard — Build Full (Installeur .exe)
+echo  PrankGuard - Build Full (Installer .exe)
 echo ============================================
 echo.
 
-REM Verifier que le build Lite existe
+REM Check Lite build exists
 if not exist "dist\PrankGuard\PrankGuard.exe" (
-    echo [INFO] Build Lite absent — lancement de build_lite.bat d'abord...
+    echo [INFO] Lite build missing - running build_lite.bat first...
     echo.
     call build_lite.bat
     if errorlevel 1 (
-        echo [ERREUR] Build Lite echoue. Arrêt.
+        echo [ERROR] Lite build failed. Stopping.
         pause & exit /b 1
     )
 )
 
-REM Chercher ISCC.exe dans les emplacements standards
+REM Find ISCC.exe
 set "ISCC="
 for %%P in (
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -33,35 +32,35 @@ for %%P in (
 )
 
 if "!ISCC!"=="" (
-    echo [ERREUR] Inno Setup introuvable.
+    echo [ERROR] Inno Setup not found.
     echo.
-    echo Telecharger Inno Setup 6 :
+    echo Download Inno Setup 6:
     echo   https://jrsoftware.org/isdl.php
     echo.
-    echo Puis relancer ce script.
+    echo Then run this script again.
     pause & exit /b 1
 )
 
-echo [INFO] Inno Setup : !ISCC!
+echo [INFO] Inno Setup: !ISCC!
 echo.
 
-REM Creer le dossier output si absent
+REM Create output dir
 if not exist "output" mkdir output
 
-REM Compiler le script Inno Setup
-echo [BUILD] Compilation en cours...
+REM Compile
+echo [BUILD] Compiling Inno Setup script...
 "!ISCC!" "build_full.iss"
 
 if errorlevel 1 (
     echo.
-    echo [ECHEC] Compilation Inno Setup echouee. Voir les logs ci-dessus.
+    echo [FAILED] Inno Setup compilation failed. Check logs above.
     pause & exit /b 1
 )
 
 echo.
 echo ============================================
 for %%F in (output\PrankGuard_Setup_*.exe) do (
-    echo  Installeur : %%F
+    echo  Installer: %%F
 )
 echo ============================================
 pause

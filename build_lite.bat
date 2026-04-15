@@ -1,62 +1,60 @@
 @echo off
 setlocal EnableDelayedExpansion
-chcp 65001 > nul
-title PrankGuard — Build Lite
+title PrankGuard - Build Lite
 
 echo ============================================
-echo  PrankGuard — Build Lite (PyInstaller)
+echo  PrankGuard - Build Lite (PyInstaller)
 echo  One-dir, UAC admin, Windows 64-bit
 echo ============================================
 echo.
 
-REM Verifier presence venv312
+REM Check venv312
 if not exist "venv312\Scripts\activate.bat" (
-    echo [ERREUR] venv312 introuvable.
-    echo Lancer ce script depuis la racine du projet PrankGuard.
+    echo [ERROR] venv312 not found.
+    echo Run this script from the PrankGuard project root.
     pause & exit /b 1
 )
 
-REM Activation venv
-echo [1/4] Activation venv312...
+REM Activate venv
+echo [1/4] Activating venv312...
 call venv312\Scripts\activate.bat
 if errorlevel 1 (
-    echo [ERREUR] Echec activation venv312.
+    echo [ERROR] Failed to activate venv312.
     pause & exit /b 1
 )
 
-REM Verifier / installer PyInstaller
-echo [2/4] Verification PyInstaller...
-python -c "import PyInstaller; print('       PyInstaller', PyInstaller.__version__)" 2>nul
+REM Check / install PyInstaller
+echo [2/4] Checking PyInstaller...
+venv312\Scripts\python.exe -c "import PyInstaller; print('       PyInstaller', PyInstaller.__version__)" 2>nul
 if errorlevel 1 (
-    echo       PyInstaller absent — installation...
-    pip install --quiet pyinstaller
+    echo       PyInstaller not found - installing...
+    venv312\Scripts\pip.exe install --quiet pyinstaller
     if errorlevel 1 (
-        echo [ERREUR] Impossible d'installer PyInstaller.
+        echo [ERROR] Failed to install PyInstaller.
         pause & exit /b 1
     )
 )
 
-REM Nettoyage builds precedents
-echo [3/4] Nettoyage builds precedents...
+REM Clean previous build
+echo [3/4] Cleaning previous build...
 if exist "build" rmdir /s /q "build"
 if exist "dist\PrankGuard" rmdir /s /q "dist\PrankGuard"
 
-REM Build PyInstaller
-echo [4/4] Build en cours (2-5 min selon la machine)...
+REM Build
+echo [4/4] Building (2-5 min)...
 echo.
-pyinstaller build_lite.spec --clean --noconfirm
+venv312\Scripts\pyinstaller.exe build_lite.spec --clean --noconfirm
 
 if errorlevel 1 (
     echo.
-    echo [ECHEC] Build PyInstaller echoue. Voir les logs ci-dessus.
+    echo [FAILED] PyInstaller build failed. Check logs above.
     pause & exit /b 1
 )
 
 echo.
 echo ============================================
-echo  Build OK : dist\PrankGuard\PrankGuard.exe
-echo.
-echo  Taille estimee : 200-350 MB (one-dir)
-echo  Tester : cd dist\PrankGuard ^&^& PrankGuard.exe
+echo  Build OK: dist\PrankGuard\PrankGuard.exe
+echo  Size estimate: 200-350 MB (one-dir)
+echo  Test: cd dist\PrankGuard ^&^& PrankGuard.exe
 echo ============================================
 pause
