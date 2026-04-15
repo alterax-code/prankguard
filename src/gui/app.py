@@ -108,11 +108,15 @@ class PrankGuardApp(ctk.CTk):
         self._build_ui()
 
         # Systray — icône couleur temps réel dans la barre de notification
+        self._stealth_var = ctk.BooleanVar(value=config.stealth_mode)
         self._systray = SystrayIcon(
             on_show_hide=lambda: self.after(0, self._toggle_window),
             on_quit=lambda: self.after(0, self._on_close_request),
         )
         self._systray.start()
+        # Mode stealth : masquer la fenêtre au démarrage si activé
+        if config.stealth_mode:
+            self.after(200, self.withdraw)
 
         # Brancher le logger sur la GUI
         logger.set_gui_callback(self._log_to_gui)
@@ -349,6 +353,10 @@ class PrankGuardApp(ctk.CTk):
             scroll, text="Changer le mot de passe", width=200, fg_color="#8e44ad",
             command=self._change_password
         ).pack(anchor="w", padx=40, pady=(2, 8))
+        ctk.CTkSwitch(
+            scroll, text="Mode stealth (démarrer fenêtre masquée — accès via systray)",
+            variable=self._stealth_var, command=self._on_stealth_toggle
+        ).pack(anchor="w", padx=40, pady=3)
 
         # Bouton re-enrollment
         ctk.CTkButton(
@@ -446,6 +454,12 @@ class PrankGuardApp(ctk.CTk):
         enabled = self._close_protection_var.get()
         self.config.update(close_protection_enabled=enabled)
         logger.toggle(f"Protection anti-fermeture {'ACTIVÉE' if enabled else 'DÉSACTIVÉE'}")
+
+    def _on_stealth_toggle(self):
+        """Active/désactive le mode stealth (fenêtre masquée au démarrage)."""
+        enabled = self._stealth_var.get()
+        self.config.update(stealth_mode=enabled)
+        logger.toggle(f"Mode stealth {'ACTIVÉ' if enabled else 'DÉSACTIVÉ'}")
 
     def _change_password(self):
         """Dialogue pour changer le mot de passe de protection."""

@@ -58,6 +58,9 @@ class Config:
     close_protection_password_hash: str = ""
     intrusion_log_path: str = "intrusion_log.txt"
 
+    # Mode stealth (Sprint 2 — Feature 2)
+    stealth_mode: bool = False
+
     @classmethod
     def load(cls) -> "Config":
         """Charge la config depuis le fichier JSON, ou crée les défauts."""
