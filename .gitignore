@@ -29,6 +29,7 @@ data/owner_faces/encodings.npy
 
 # PyInstaller / Inno Setup
 *.spec
+!build_lite.spec
 output/
 
 # Env
