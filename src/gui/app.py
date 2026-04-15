@@ -8,7 +8,9 @@ FIX 7 — Notifications device (popup au lieu de lock direct).
 FIX 9 — Layout responsive (grid + redimensionnement caméra).
 """
 import cv2
+import hashlib
 import numpy as np
+import os
 import time
 import threading
 import winsound
@@ -84,6 +86,9 @@ class PrankGuardApp(ctk.CTk):
         self._alarm_var = ctk.BooleanVar(value=config.sound_alarm_enabled)
         self._threat_start: float = None  # Timestamp début état THREAT
 
+        # Protection anti-fermeture
+        self._close_protection_var = ctk.BooleanVar(value=config.close_protection_enabled)
+
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
         self.watch_usb_hid = ctk.BooleanVar(value=config.watch_usb_hid)
@@ -115,7 +120,7 @@ class PrankGuardApp(ctk.CTk):
         threading.Thread(target=self._camera_loop, daemon=True).start()
         threading.Thread(target=self._keyboard_listener, daemon=True).start()
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
     # ── UI ────────────────────────────────────────────────────────────
 
@@ -323,6 +328,14 @@ class PrankGuardApp(ctk.CTk):
             scroll, text="Alarme sonore (mode SECURE, intrusion >3s)",
             variable=self._alarm_var, command=self._on_alarm_toggle
         ).pack(anchor="w", padx=40, pady=3)
+        ctk.CTkSwitch(
+            scroll, text="Protection anti-fermeture (mot de passe + watchdog)",
+            variable=self._close_protection_var, command=self._on_close_protection_toggle
+        ).pack(anchor="w", padx=40, pady=3)
+        ctk.CTkButton(
+            scroll, text="Changer le mot de passe", width=200, fg_color="#8e44ad",
+            command=self._change_password
+        ).pack(anchor="w", padx=40, pady=(2, 8))
 
         # Bouton re-enrollment
         ctk.CTkButton(
@@ -414,6 +427,27 @@ class PrankGuardApp(ctk.CTk):
         if not enabled:
             self._stop_alarm()
         logger.toggle(f"Alarme sonore {'ACTIVÉE' if enabled else 'DÉSACTIVÉE'}")
+
+    def _on_close_protection_toggle(self):
+        """Active/désactive la protection anti-fermeture."""
+        enabled = self._close_protection_var.get()
+        self.config.update(close_protection_enabled=enabled)
+        logger.toggle(f"Protection anti-fermeture {'ACTIVÉE' if enabled else 'DÉSACTIVÉE'}")
+
+    def _change_password(self):
+        """Dialogue pour changer le mot de passe de protection."""
+        dialog = ctk.CTkInputDialog(
+            text="Nouveau mot de passe (laisser vide = 0000):",
+            title="Changer le mot de passe"
+        )
+        new_pwd = dialog.get_input()
+        if new_pwd is None:
+            return  # Annulé
+        if not new_pwd:
+            new_pwd = "0000"
+        h = hashlib.sha256(new_pwd.encode()).hexdigest()
+        self.config.update(close_protection_password_hash=h)
+        logger.toggle("Mot de passe de protection modifié")
 
     def _start_alarm(self):
         """Démarre l'alarme sonore dans un thread daemon."""
@@ -740,6 +774,9 @@ class PrankGuardApp(ctk.CTk):
                 if keyboard.is_pressed("u"):
                     self.after(0, self._unblock_action)
                     time.sleep(0.3)
+                if keyboard.is_pressed("q"):
+                    self.after(0, self._on_close_request)
+                    time.sleep(0.5)
 
             time.sleep(0.05)
 
@@ -791,11 +828,38 @@ class PrankGuardApp(ctk.CTk):
         except Exception:
             pass
 
+    def _on_close_request(self):
+        """Fermeture demandée — vérifie le mot de passe si protection activée."""
+        if not self._close_protection_var.get():
+            self._on_close()
+            return
+        dialog = ctk.CTkInputDialog(
+            text="Mot de passe requis pour fermer PrankGuard:",
+            title="Protection anti-fermeture"
+        )
+        password = dialog.get_input()
+        if password is None:
+            return  # Annulé par l'utilisateur
+        h = hashlib.sha256(password.encode()).hexdigest()
+        if h == self.config.close_protection_password_hash:
+            self._on_close()
+        else:
+            logger.warning("Protection anti-fermeture: mot de passe incorrect")
+
     def _on_close(self):
         """Fermeture propre de l'application."""
         self._closing = True
         self.running = False
         self._alarm_active = False  # Arrêter l'alarme si active
+        # Écrire le flag watchdog avant la destruction
+        try:
+            flag_dir = os.path.join(os.path.expanduser("~"), ".prankguard")
+            os.makedirs(flag_dir, exist_ok=True)
+            flag_path = os.path.join(flag_dir, "watchdog_shutdown.flag")
+            with open(flag_path, "w") as f:
+                f.write("ok")
+        except Exception:
+            pass
         self.usb_watcher.stop()
         self.poll_watcher.stop()
         self.locker.do_unlock()

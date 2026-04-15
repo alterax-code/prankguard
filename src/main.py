@@ -84,11 +84,21 @@ def main():
     from src.enrollment import check_enrollment, EnrollmentWindow
     from src.gui.app import PrankGuardApp
 
+    import subprocess
     import customtkinter as ctk
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
 
     config = Config.load()
+
+    # Lancer le watchdog si la protection anti-fermeture est activée
+    if config.close_protection_enabled:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        subprocess.Popen(
+            [sys.executable, "-m", "src.watchdog", str(os.getpid()), project_root],
+            cwd=project_root,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
 
     # Migration rétrocompat pkl → npy au premier lancement
     _migrate_pkl_to_npy(config.encodings_path)

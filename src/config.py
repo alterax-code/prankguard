@@ -3,6 +3,7 @@ Configuration persistante JSON.
 FIX 4 — Modes Pedago/Secure sauvegardés.
 FIX 5 — Modes Desktop/Laptop sauvegardés.
 """
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field, asdict
@@ -53,6 +54,8 @@ class Config:
     # Fonctionnalités avancées
     anti_spoof_enabled: bool = False
     sound_alarm_enabled: bool = False
+    close_protection_enabled: bool = False
+    close_protection_password_hash: str = ""
 
     @classmethod
     def load(cls) -> "Config":
@@ -85,6 +88,10 @@ class Config:
 
         # Clamp face_tolerance entre 0.1 et 0.9
         obj.face_tolerance = max(0.1, min(0.9, float(obj.face_tolerance)))
+
+        # Initialiser le hash du mot de passe par défaut si vide ("0000")
+        if not obj.close_protection_password_hash:
+            obj.close_protection_password_hash = hashlib.sha256(b"0000").hexdigest()
 
         # Auto-profil hardware (si non configuré explicitement dans config.json)
         every_n, scale = cls._hw_profile()
