@@ -19,6 +19,7 @@ class Locker:
         self.usb_blocked = False
 
         self._last_lock_time: float = 0
+        self._device_cooldown_end: float = 0.0
         self._mutex = threading.Lock()
 
     def can_lock(self) -> bool:
@@ -67,9 +68,8 @@ class Locker:
     @property
     def device_cooldown_active(self) -> bool:
         """Vérifie si le cooldown device est actif."""
-        return time.time() < getattr(self, '_device_cooldown_end', 0)
+        return time.time() < self._device_cooldown_end
 
     def get_device_cooldown_remaining(self) -> float:
         """Temps restant du cooldown device."""
-        end = getattr(self, '_device_cooldown_end', 0)
-        return max(0, end - time.time())
+        return max(0, self._device_cooldown_end - time.time())

@@ -77,6 +77,9 @@ _u32.RegisterDeviceNotificationW.argtypes = [
 _u32.UnregisterDeviceNotification.restype = ctypes.c_bool
 _u32.UnregisterDeviceNotification.argtypes = [ctypes.c_void_p]
 
+_u32.DestroyWindow.restype = ctypes.c_bool
+_u32.DestroyWindow.argtypes = [ctypes.c_void_p]
+
 
 class GUID(ctypes.Structure):
     _fields_ = [
@@ -201,3 +204,7 @@ class DeviceWatcher:
         self.running = False
         if self.hdev_notify:
             _u32.UnregisterDeviceNotification(self.hdev_notify)
+            self.hdev_notify = None
+        if self.hwnd:
+            _u32.DestroyWindow(self.hwnd)
+            self.hwnd = None

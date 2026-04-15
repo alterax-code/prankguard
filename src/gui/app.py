@@ -49,6 +49,8 @@ class PrankGuardApp(ctk.CTk):
         self.running = True
         self.paused = False
         self.cap = None
+        self._closing = False          # FIX shutdown — guard .after() post-destroy
+        self._cap_lock = threading.Lock()  # FIX OpenCV — protège release/reopen
 
         # Modules
         self.face_analyzer = FaceAnalyzer(
@@ -468,6 +470,8 @@ class PrankGuardApp(ctk.CTk):
         self._update_usb_label()
 
     def _update_usb_label(self):
+        if self._closing:
+            return
         if self.locker.usb_blocked:
             self.usb_lbl.configure(text="USB: BLOQUÉ", text_color="#e74c3c")
         else:
@@ -481,7 +485,7 @@ class PrankGuardApp(ctk.CTk):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        while self.running:
+        while self.running and not self._closing:
             # Afficher les cooldowns dans le footer
             self._update_cooldowns()
 
@@ -500,10 +504,14 @@ class PrankGuardApp(ctk.CTk):
                 result = self.state_machine.on_camera_lost(self.locker.can_lock())
                 if result["should_lock"]:
                     self.locker.do_lock(result["lock_reason"])
-                    self._update_usb_label()
-                    self.cap.release()
+                    self.after(0, self._update_usb_label)
+                    with self._cap_lock:
+                        self.cap.release()
+                        self.cap = None
                     time.sleep(2)
-                    self.cap = cv2.VideoCapture(0)
+                    with self._cap_lock:
+                        if self.running and not self._closing:
+                            self.cap = cv2.VideoCapture(0)
                 time.sleep(0.1)
                 continue
 
@@ -534,7 +542,7 @@ class PrankGuardApp(ctk.CTk):
                 # Vérifier si on doit locker
                 if result["should_lock"]:
                     self.locker.do_lock(result["lock_reason"])
-                    self._update_usb_label()
+                    self.after(0, self._update_usb_label)
                     time.sleep(2)
                     continue
 
@@ -543,7 +551,7 @@ class PrankGuardApp(ctk.CTk):
                     self.locker.do_unlock()
                     self.locker.set_device_cooldown(5.0)
                     self.poll_watcher.reset_baselines()
-                    self._update_usb_label()
+                    self.after(0, self._update_usb_label)
 
             # Dessiner les rectangles (résultats en cache) et afficher
             frame = self.face_analyzer.draw_on_frame(frame)
@@ -551,8 +559,10 @@ class PrankGuardApp(ctk.CTk):
 
             time.sleep(0.03)
 
-        if self.cap:
-            self.cap.release()
+        with self._cap_lock:
+            if self.cap:
+                self.cap.release()
+                self.cap = None
 
     def _display_frame(self, frame):
         """Affiche un frame dans la GUI (FIX 6 — tous les frames)."""
@@ -635,10 +645,10 @@ class PrankGuardApp(ctk.CTk):
 
     def _reenroll(self):
         """Relance l'enrollment."""
+        self._closing = True
         self.running = False
         self.usb_watcher.stop()
         self.poll_watcher.stop()
-        time.sleep(0.3)
         self.destroy()
 
         from src.enrollment import EnrollmentWindow
@@ -648,18 +658,22 @@ class PrankGuardApp(ctk.CTk):
         ).mainloop()
 
     def _log_to_gui(self, formatted_msg: str):
-        """Callback du logger → affiche dans la textbox."""
+        """Callback du logger → dispatch sur le thread GUI (thread-safe)."""
+        if not self._closing:
+            self.after(0, lambda m=formatted_msg: self._insert_log(m))
+
+    def _insert_log(self, msg: str):
         try:
-            self.log_box.insert("end", formatted_msg + "\n")
+            self.log_box.insert("end", msg + "\n")
             self.log_box.see("end")
         except Exception:
             pass
 
     def _on_close(self):
         """Fermeture propre de l'application."""
+        self._closing = True
         self.running = False
         self.usb_watcher.stop()
         self.poll_watcher.stop()
         self.locker.do_unlock()
-        time.sleep(0.2)
         self.destroy()
