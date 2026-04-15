@@ -61,6 +61,9 @@ class Config:
     # Mode stealth (Sprint 2 — Feature 2)
     stealth_mode: bool = False
 
+    # Chiffrement AES-256 des encodings (Sprint 2 — Feature 5)
+    encryption_enabled: bool = False
+
     # Alertes email SMTP (Sprint 2 — Feature 4)
     email_enabled: bool = False
     smtp_host: str = ""

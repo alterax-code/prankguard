@@ -131,7 +131,8 @@ def main():
         # Lancer l'enrollment puis l'app
         EnrollmentWindow(
             encodings_path=config.encodings_path,
-            on_complete=lambda: PrankGuardApp(config).mainloop()
+            on_complete=lambda: PrankGuardApp(config).mainloop(),
+            encrypt_enabled=config.encryption_enabled,
         ).mainloop()
     else:
         PrankGuardApp(config).mainloop()

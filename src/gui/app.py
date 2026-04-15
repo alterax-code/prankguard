@@ -23,7 +23,8 @@ from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
 from src.systray import SystrayIcon
-from src.enrollment import load_authorized_users, save_authorized_users
+from src.enrollment import load_authorized_users, load_authorized_users_from_bytes, save_authorized_users
+from src.crypto import is_encrypted, encrypt_encodings, decrypt_encodings
 from src.anti_spoof import AntiSpoof
 from src.intrusion_report import IntrusionReporter, IntrusionType, Criticality
 from src.email_alert import EmailAlerter
@@ -48,8 +49,14 @@ class PrankGuardApp(ctk.CTk):
         self.geometry("1100x800")
         self.minsize(900, 700)  # FIX 9 — taille minimale
 
-        # Charger les utilisateurs autorisés (format .npz multi-utilisateurs)
-        self.authorized_users = load_authorized_users(config.encodings_path)
+        # Charger les utilisateurs autorisés (déchiffrement AES-256 si nécessaire)
+        try:
+            raw = open(config.encodings_path, "rb").read()
+            if is_encrypted(raw):
+                raw = decrypt_encodings(raw)
+            self.authorized_users = load_authorized_users_from_bytes(raw)
+        except Exception:
+            self.authorized_users = {}
 
         # État global
         self.running = True
@@ -105,6 +112,9 @@ class PrankGuardApp(ctk.CTk):
             recipient=config.smtp_recipient,
         )
         self._email_var = ctk.BooleanVar(value=config.email_enabled)
+
+        # Chiffrement AES-256 des encodings (Sprint 2 — Feature 5)
+        self._encrypt_var = ctk.BooleanVar(value=config.encryption_enabled)
 
         # Variables de toggles
         self.watch_usb = ctk.BooleanVar(value=config.watch_usb)
@@ -438,6 +448,17 @@ class PrankGuardApp(ctk.CTk):
             command=self._add_user
         ).pack(anchor="w", padx=40, pady=(2, 10))
 
+        # Chiffrement AES-256 des encodings (Sprint 2 — Feature 5)
+        ctk.CTkLabel(
+            scroll, text="Chiffrement des encodings",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(20, 5))
+        ctk.CTkSwitch(
+            scroll,
+            text="Chiffrer les encodings (AES-256-GCM, clé liée à cette machine)",
+            variable=self._encrypt_var, command=self._on_encrypt_toggle
+        ).pack(anchor="w", padx=40, pady=3)
+
         # Bouton re-enrollment (ré-enregistre l'owner)
         ctk.CTkButton(
             scroll, text="Ré-enregistrer le visage (owner)",
@@ -576,6 +597,38 @@ class PrankGuardApp(ctk.CTk):
         self._email_alerter.reconfigure(host, port, user, pwd_b64, rcpt)
         self._smtp_pwd_var.set("")  # Vider le champ mot de passe après sauvegarde
         logger.toggle("Configuration SMTP sauvegardée")
+
+    def _on_encrypt_toggle(self):
+        """Active/désactive le chiffrement AES-256 des encodings à la volée."""
+        import io
+        enabled = self._encrypt_var.get()
+        path = self.config.encodings_path
+
+        if not os.path.exists(path):
+            self.config.update(encryption_enabled=enabled)
+            return
+
+        try:
+            raw = open(path, "rb").read()
+            if enabled and not is_encrypted(raw):
+                # Chiffrer le fichier existant
+                raw = encrypt_encodings(raw)
+                with open(path, "wb") as f:
+                    f.write(raw)
+                logger.toggle("Encodings chiffrés (AES-256-GCM)")
+            elif not enabled and is_encrypted(raw):
+                # Déchiffrer le fichier existant
+                raw = decrypt_encodings(raw)
+                with open(path, "wb") as f:
+                    f.write(raw)
+                logger.toggle("Encodings déchiffrés")
+        except Exception as exc:
+            logger.warning(f"Erreur chiffrement/déchiffrement: {exc}")
+            # Remettre le switch à son état précédent
+            self._encrypt_var.set(not enabled)
+            return
+
+        self.config.update(encryption_enabled=enabled)
 
     def _change_password(self):
         """Dialogue pour changer le mot de passe de protection."""
@@ -1014,6 +1067,7 @@ class PrankGuardApp(ctk.CTk):
             encodings_path=self.config.encodings_path,
             on_complete=lambda: PrankGuardApp(self.config).mainloop(),
             username=username,
+            encrypt_enabled=self.config.encryption_enabled,
         ).mainloop()
 
     def _refresh_users_ui(self):

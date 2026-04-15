@@ -39,16 +39,18 @@ OPTIMAL_PHOTOS = 30
 
 
 def check_enrollment(encodings_path: str) -> bool:
-    """Vérifie si un enrollment valide existe (supporte .npy et .npz)."""
+    """Vérifie si un enrollment valide existe (supporte .npy, .npz et fichiers chiffrés)."""
     if not os.path.exists(encodings_path):
         return False
     try:
-        if encodings_path.endswith(".npz"):
-            data = np.load(encodings_path, allow_pickle=False)
-            return any(len(data[k]) > 0 for k in data.files)
-        else:
-            data = np.load(encodings_path, allow_pickle=False)
-            return len(data) > 0
+        import io
+        raw = open(encodings_path, "rb").read()
+        # Déchiffrer si nécessaire
+        if raw[:4] == b"PGRD":
+            from src.crypto import decrypt_encodings
+            raw = decrypt_encodings(raw)
+        data = np.load(io.BytesIO(raw), allow_pickle=False)
+        return any(len(data[k]) > 0 for k in data.files)
     except Exception:
         return False
 
@@ -90,11 +92,13 @@ class EnrollmentWindow(ctk.CTk):
         encodings_path: str,
         on_complete: Callable,
         username: str = "owner",
+        encrypt_enabled: bool = False,
     ):
         super().__init__()
         self.encodings_path = encodings_path
         self.on_complete = on_complete
         self.username = username
+        self.encrypt_enabled = encrypt_enabled
         self.title(f"PrankGuard — Enrollment ({username})")
         self.geometry("720x600")
         self.resizable(False, False)
@@ -108,13 +112,15 @@ class EnrollmentWindow(ctk.CTk):
         # Charger les encodings existants pour cet utilisateur si présents
         if os.path.exists(self.encodings_path):
             try:
-                if self.encodings_path.endswith(".npz"):
-                    data = np.load(self.encodings_path, allow_pickle=False)
-                    if username in data.files:
-                        self.encodings = list(data[username])
-                else:
-                    data = np.load(self.encodings_path, allow_pickle=False)
-                    self.encodings = list(data)
+                import io
+                raw = open(self.encodings_path, "rb").read()
+                # Déchiffrer si nécessaire (fichier chiffré AES-256)
+                if raw[:4] == b"PGRD":
+                    from src.crypto import decrypt_encodings
+                    raw = decrypt_encodings(raw)
+                data = np.load(io.BytesIO(raw), allow_pickle=False)
+                if username in data.files:
+                    self.encodings = list(data[username])
                 self.photo_count = len(self.encodings)
             except Exception:
                 pass
@@ -245,19 +251,35 @@ class EnrollmentWindow(ctk.CTk):
 
     def _finish(self):
         """Sauvegarde les encodings (format .npz multi-utilisateurs) et lance l'app."""
+        import io
         arr = np.array(self.encodings) if self.encodings else np.empty((0, 128), dtype=np.float64)
 
         # Charger les utilisateurs existants pour ne pas écraser les autres
         existing_users = {}
         if os.path.exists(self.encodings_path):
             try:
-                data = np.load(self.encodings_path, allow_pickle=False)
-                existing_users = {name: data[name] for name in data.files}
+                raw = open(self.encodings_path, "rb").read()
+                if raw[:4] == b"PGRD":
+                    from src.crypto import decrypt_encodings
+                    raw = decrypt_encodings(raw)
+                existing_users = load_authorized_users_from_bytes(raw)
             except Exception:
                 pass
 
         existing_users[self.username] = arr
-        save_authorized_users(self.encodings_path, existing_users)
+
+        # Sérialiser en mémoire puis chiffrer si activé
+        buf = io.BytesIO()
+        np.savez(buf, **existing_users)
+        raw_out = buf.getvalue()
+
+        if self.encrypt_enabled:
+            from src.crypto import encrypt_encodings
+            raw_out = encrypt_encodings(raw_out)
+
+        os.makedirs(os.path.dirname(os.path.abspath(self.encodings_path)), exist_ok=True)
+        with open(self.encodings_path, "wb") as f:
+            f.write(raw_out)
 
         self.running = False
         time.sleep(0.3)
