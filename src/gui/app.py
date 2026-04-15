@@ -22,6 +22,7 @@ from datetime import datetime
 from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
+from src.systray import SystrayIcon
 from src.anti_spoof import AntiSpoof
 from src.intrusion_report import IntrusionReporter, IntrusionType, Criticality
 from src.state_machine import StateMachine, State, STATE_COLORS
@@ -105,6 +106,13 @@ class PrankGuardApp(ctk.CTk):
 
         # Construire l'interface
         self._build_ui()
+
+        # Systray — icône couleur temps réel dans la barre de notification
+        self._systray = SystrayIcon(
+            on_show_hide=lambda: self.after(0, self._toggle_window),
+            on_quit=lambda: self.after(0, self._on_close_request),
+        )
+        self._systray.start()
 
         # Brancher le logger sur la GUI
         logger.set_gui_callback(self._log_to_gui)
@@ -681,6 +689,8 @@ class PrankGuardApp(ctk.CTk):
                     text=s, text_color=c
                 ))
                 self.after(0, lambda t=result["countdown"]: self.countdown_label.configure(text=t))
+                # Mettre à jour la couleur du systray
+                self._systray.update_state(state)
 
                 # Vérifier si on doit locker
                 if result["should_lock"]:
@@ -899,11 +909,21 @@ class PrankGuardApp(ctk.CTk):
         else:
             logger.warning("Protection anti-fermeture: mot de passe incorrect")
 
+    def _toggle_window(self):
+        """Bascule la visibilité de la fenêtre principale (systray double-clic)."""
+        if self.winfo_viewable():
+            self.withdraw()
+        else:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+
     def _on_close(self):
         """Fermeture propre de l'application."""
         self._closing = True
         self.running = False
         self._alarm_active = False  # Arrêter l'alarme si active
+        self._systray.stop()  # Arrêter l'icône systray
         # Clôturer l'intrusion en cours si applicable
         if self._intrusion_active:
             self._intrusion_active = False

@@ -8,3 +8,5 @@ customtkinter>=5.2.0
 pywin32>=306
 wmi>=1.5.1
 setuptools<71
+pystray>=0.19.0
+cryptography>=41.0.0
