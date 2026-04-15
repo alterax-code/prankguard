@@ -39,24 +39,63 @@ OPTIMAL_PHOTOS = 30
 
 
 def check_enrollment(encodings_path: str) -> bool:
-    """Vérifie si un enrollment valide existe."""
+    """Vérifie si un enrollment valide existe (supporte .npy et .npz)."""
     if not os.path.exists(encodings_path):
         return False
     try:
-        data = np.load(encodings_path, allow_pickle=False)
-        return len(data) > 0
+        if encodings_path.endswith(".npz"):
+            data = np.load(encodings_path, allow_pickle=False)
+            return any(len(data[k]) > 0 for k in data.files)
+        else:
+            data = np.load(encodings_path, allow_pickle=False)
+            return len(data) > 0
     except Exception:
         return False
 
 
-class EnrollmentWindow(ctk.CTk):
-    """Fenêtre de capture de visages pour l'enrollment du propriétaire."""
+def load_authorized_users(path: str) -> dict:
+    """
+    Charge les utilisateurs depuis un fichier .npz.
+    Retourne {nom: ndarray(N, 128)}.
+    """
+    data = np.load(path, allow_pickle=False)
+    return {name: data[name] for name in data.files}
 
-    def __init__(self, encodings_path: str, on_complete: Callable):
+
+def load_authorized_users_from_bytes(raw: bytes) -> dict:
+    """
+    Charge les utilisateurs depuis des bytes (après déchiffrement en mémoire).
+    Retourne {nom: ndarray(N, 128)}.
+    """
+    import io
+    buf = io.BytesIO(raw)
+    data = np.load(buf, allow_pickle=False)
+    return {name: data[name] for name in data.files}
+
+
+def save_authorized_users(path: str, users: dict) -> None:
+    """
+    Sauvegarde {nom: ndarray(N, 128)} dans un fichier .npz.
+    Crée les répertoires parents si nécessaire.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    np.savez(path, **users)
+
+
+class EnrollmentWindow(ctk.CTk):
+    """Fenêtre de capture de visages pour l'enrollment d'un utilisateur."""
+
+    def __init__(
+        self,
+        encodings_path: str,
+        on_complete: Callable,
+        username: str = "owner",
+    ):
         super().__init__()
         self.encodings_path = encodings_path
         self.on_complete = on_complete
-        self.title("PrankGuard — Setup")
+        self.username = username
+        self.title(f"PrankGuard — Enrollment ({username})")
         self.geometry("720x600")
         self.resizable(False, False)
 
@@ -66,11 +105,16 @@ class EnrollmentWindow(ctk.CTk):
         self.photo_count = 0
         self.current_frame = None
 
-        # Charger les encodings existants si présents
+        # Charger les encodings existants pour cet utilisateur si présents
         if os.path.exists(self.encodings_path):
             try:
-                data = np.load(self.encodings_path, allow_pickle=False)
-                self.encodings = list(data)
+                if self.encodings_path.endswith(".npz"):
+                    data = np.load(self.encodings_path, allow_pickle=False)
+                    if username in data.files:
+                        self.encodings = list(data[username])
+                else:
+                    data = np.load(self.encodings_path, allow_pickle=False)
+                    self.encodings = list(data)
                 self.photo_count = len(self.encodings)
             except Exception:
                 pass
@@ -200,10 +244,20 @@ class EnrollmentWindow(ctk.CTk):
             self.tip_label.configure(text=CAPTURE_TIPS[tip_idx])
 
     def _finish(self):
-        """Sauvegarde les encodings et lance l'app."""
-        os.makedirs(os.path.dirname(self.encodings_path), exist_ok=True)
+        """Sauvegarde les encodings (format .npz multi-utilisateurs) et lance l'app."""
         arr = np.array(self.encodings) if self.encodings else np.empty((0, 128), dtype=np.float64)
-        np.save(self.encodings_path, arr)
+
+        # Charger les utilisateurs existants pour ne pas écraser les autres
+        existing_users = {}
+        if os.path.exists(self.encodings_path):
+            try:
+                data = np.load(self.encodings_path, allow_pickle=False)
+                existing_users = {name: data[name] for name in data.files}
+            except Exception:
+                pass
+
+        existing_users[self.username] = arr
+        save_authorized_users(self.encodings_path, existing_users)
 
         self.running = False
         time.sleep(0.3)

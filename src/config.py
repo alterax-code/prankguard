@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".prankguard")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-DEFAULT_ENCODINGS = os.path.join("data", "owner_faces", "encodings.npy")
+DEFAULT_ENCODINGS = os.path.join("data", "owner_faces", "authorized_users.npz")
 
 
 @dataclass

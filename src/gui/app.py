@@ -23,6 +23,7 @@ from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
 from src.systray import SystrayIcon
+from src.enrollment import load_authorized_users, save_authorized_users
 from src.anti_spoof import AntiSpoof
 from src.intrusion_report import IntrusionReporter, IntrusionType, Criticality
 from src.state_machine import StateMachine, State, STATE_COLORS
@@ -46,9 +47,8 @@ class PrankGuardApp(ctk.CTk):
         self.geometry("1100x800")
         self.minsize(900, 700)  # FIX 9 — taille minimale
 
-        # Charger les encodings
-        data = np.load(config.encodings_path, allow_pickle=False)
-        self.owner_encodings = list(data)
+        # Charger les utilisateurs autorisés (format .npz multi-utilisateurs)
+        self.authorized_users = load_authorized_users(config.encodings_path)
 
         # État global
         self.running = True
@@ -59,7 +59,7 @@ class PrankGuardApp(ctk.CTk):
 
         # Modules
         self.face_analyzer = FaceAnalyzer(
-            owner_encodings=self.owner_encodings,
+            authorized_users=self.authorized_users,
             tolerance=config.face_tolerance,
             min_face_size=config.min_face_size,
             center_threshold=config.center_threshold,
@@ -131,7 +131,11 @@ class PrankGuardApp(ctk.CTk):
 
         # Cooldown initial (5s pour stabiliser les baselines)
         self.locker.set_device_cooldown(5.0)
-        logger.start(f"PrankGuard v2.0 démarré — {len(self.owner_encodings)} visages chargés")
+        total_enc = sum(len(v) for v in self.authorized_users.values())
+        logger.start(
+            f"PrankGuard v2.0 démarré — {total_enc} visages, "
+            f"{len(self.authorized_users)} utilisateur(s): {list(self.authorized_users.keys())}"
+        )
 
         # Threads
         threading.Thread(target=self._camera_loop, daemon=True).start()
@@ -358,9 +362,22 @@ class PrankGuardApp(ctk.CTk):
             variable=self._stealth_var, command=self._on_stealth_toggle
         ).pack(anchor="w", padx=40, pady=3)
 
-        # Bouton re-enrollment
+        # Gestion des utilisateurs (Sprint 2 — multi-utilisateurs)
+        ctk.CTkLabel(
+            scroll, text="Gestion des utilisateurs",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(20, 5))
+        self._users_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._users_frame.pack(fill="x", padx=40, pady=5)
+        self._refresh_users_ui()
         ctk.CTkButton(
-            scroll, text="Ré-enregistrer le visage",
+            scroll, text="Ajouter un utilisateur", width=180, fg_color="#27ae60",
+            command=self._add_user
+        ).pack(anchor="w", padx=40, pady=(2, 10))
+
+        # Bouton re-enrollment (ré-enregistre l'owner)
+        ctk.CTkButton(
+            scroll, text="Ré-enregistrer le visage (owner)",
             fg_color="#e74c3c", command=self._reenroll
         ).pack(pady=20)
 
@@ -880,18 +897,70 @@ class PrankGuardApp(ctk.CTk):
         logger.unlock("USB débloqué manuellement (cooldown 5s)")
 
     def _reenroll(self):
-        """Relance l'enrollment."""
+        """Relance l'enrollment pour l'owner."""
+        self._do_enrollment("owner")
+
+    def _do_enrollment(self, username: str):
+        """Ouvre la fenêtre d'enrollment pour un utilisateur donné."""
         self._closing = True
         self.running = False
         self.usb_watcher.stop()
         self.poll_watcher.stop()
+        self._systray.stop()
         self.destroy()
 
         from src.enrollment import EnrollmentWindow
         EnrollmentWindow(
             encodings_path=self.config.encodings_path,
-            on_complete=lambda: PrankGuardApp(self.config).mainloop()
+            on_complete=lambda: PrankGuardApp(self.config).mainloop(),
+            username=username,
         ).mainloop()
+
+    def _refresh_users_ui(self):
+        """Reconstruit la liste des utilisateurs dans l'onglet Paramètres."""
+        for widget in self._users_frame.winfo_children():
+            widget.destroy()
+        for uname, encs in self.authorized_users.items():
+            row = ctk.CTkFrame(self._users_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            ctk.CTkLabel(
+                row, text=f"{uname}  ({len(encs)} photo(s))", anchor="w"
+            ).pack(side="left")
+            if len(self.authorized_users) > 1:
+                ctk.CTkButton(
+                    row, text="Supprimer", width=80, fg_color="#e74c3c",
+                    command=lambda n=uname: self._remove_user(n)
+                ).pack(side="right")
+
+    def _add_user(self):
+        """Invite à entrer un nom puis lance l'enrollment pour ce nouvel utilisateur."""
+        dialog = ctk.CTkInputDialog(
+            text="Nom du nouvel utilisateur:",
+            title="Ajouter un utilisateur"
+        )
+        username = dialog.get_input()
+        if not username or not username.strip():
+            return
+        username = username.strip().lower().replace(" ", "_")
+        self._do_enrollment(username)
+
+    def _remove_user(self, name: str):
+        """Supprime un utilisateur des encodings sauvegardés."""
+        if name not in self.authorized_users:
+            return
+        del self.authorized_users[name]
+        save_authorized_users(self.config.encodings_path, self.authorized_users)
+        # Recréer le FaceAnalyzer avec les utilisateurs mis à jour
+        self.face_analyzer = FaceAnalyzer(
+            authorized_users=self.authorized_users,
+            tolerance=self.config.face_tolerance,
+            min_face_size=self.config.min_face_size,
+            center_threshold=self.config.center_threshold,
+            analyze_every_n=self.config.analyze_every_n_frames,
+            detection_scale=self.config.detection_scale,
+        )
+        self._refresh_users_ui()
+        logger.info(f"Utilisateur '{name}' supprimé")
 
     def _log_to_gui(self, formatted_msg: str):
         """Callback du logger → dispatch sur le thread GUI (thread-safe)."""

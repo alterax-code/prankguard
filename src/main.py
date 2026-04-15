@@ -45,6 +45,29 @@ def elevate():
     sys.exit(0)
 
 
+def _migrate_npy_to_npz(config) -> None:
+    """Convertit encodings.npy → authorized_users.npz si nécessaire (Sprint 2)."""
+    # Chemin par défaut de l'ancienne version
+    old_npy = os.path.join("data", "owner_faces", "encodings.npy")
+    new_npz = config.encodings_path  # Maintenant authorized_users.npz
+
+    if not Path(old_npy).exists():
+        return
+    if Path(new_npz).exists():
+        # Déjà migré — supprimer l'ancien
+        Path(old_npy).unlink(missing_ok=True)
+        return
+    try:
+        import numpy as np
+        data = np.load(old_npy, allow_pickle=False)
+        os.makedirs(os.path.dirname(new_npz), exist_ok=True)
+        np.savez(new_npz, owner=data)
+        Path(old_npy).unlink(missing_ok=True)
+        print(f"[PrankGuard] Migration encodings.npy → authorized_users.npz ({len(data)} encodings)")
+    except Exception as e:
+        print(f"[PrankGuard] Avertissement migration npy→npz: {e}")
+
+
 def _migrate_pkl_to_npy(encodings_path: str) -> None:
     """Convertit encodings.pkl → encodings.npy si le .pkl existe encore."""
     pkl_path = encodings_path.replace(".npy", ".pkl")
@@ -100,8 +123,9 @@ def main():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
-    # Migration rétrocompat pkl → npy au premier lancement
+    # Migration rétrocompat pkl → npy → npz au premier lancement
     _migrate_pkl_to_npy(config.encodings_path)
+    _migrate_npy_to_npz(config)
 
     if not check_enrollment(config.encodings_path):
         # Lancer l'enrollment puis l'app

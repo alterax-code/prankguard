@@ -45,6 +45,7 @@ class FaceResult:
     face_size: float      # Taille relative du visage (0-1)
     center_offset: float  # Décalage par rapport au centre (0-1)
     is_looking: bool      # Centré + assez grand = regarde l'écran
+    name: str = "?"       # Nom de l'utilisateur reconnu (Sprint 2)
 
 
 class FaceAnalyzer:
@@ -55,14 +56,28 @@ class FaceAnalyzer:
 
     def __init__(
         self,
-        owner_encodings: list,
+        owner_encodings: list = None,
         tolerance: float = 0.45,
         min_face_size: float = 0.20,
         center_threshold: float = 0.35,
         analyze_every_n: int = 3,
         detection_scale: float = 0.33,
+        authorized_users: dict = None,
     ):
-        self.owner_encodings = owner_encodings
+        # Construire les listes plates d'encodings + labels depuis authorized_users
+        if authorized_users is not None:
+            self._user_encodings: list = []
+            self._user_labels: list = []
+            for uname, encs in authorized_users.items():
+                for enc in encs:
+                    self._user_encodings.append(enc)
+                    self._user_labels.append(uname)
+        else:
+            self._user_encodings = list(owner_encodings) if owner_encodings else []
+            self._user_labels = ["owner"] * len(self._user_encodings)
+
+        # Alias backward-compat
+        self.owner_encodings = self._user_encodings
         self.tolerance = tolerance
         self.min_face_size = min_face_size
         self.center_threshold = center_threshold
@@ -126,8 +141,16 @@ class FaceAnalyzer:
             )
             for loc, enc in zip(locs, encs):
                 t, r, b, l = loc
-                dist = min(face_recognition.face_distance(self.owner_encodings, enc))
-                is_own = dist <= self.tolerance
+                if self._user_encodings:
+                    dists = face_recognition.face_distance(self._user_encodings, enc)
+                    best_idx = int(np.argmin(dists))
+                    best_dist = float(dists[best_idx])
+                    is_own = best_dist <= self.tolerance
+                    matched_name = self._user_labels[best_idx] if is_own else "?"
+                else:
+                    best_dist = 1.0
+                    is_own = False
+                    matched_name = "?"
                 sz = (b - t) / h
                 off = abs((l + r) / 2 - w / 2) / (w / 2)
                 looking = sz >= self.min_face_size and off <= self.center_threshold
@@ -135,10 +158,11 @@ class FaceAnalyzer:
                 results.append(FaceResult(
                     location=loc,
                     is_owner=is_own,
-                    distance=dist,
+                    distance=best_dist,
                     face_size=sz,
                     center_offset=off,
                     is_looking=looking,
+                    name=matched_name,
                 ))
 
         self._last_results = results
@@ -173,7 +197,7 @@ class FaceAnalyzer:
 
             if r.is_owner:
                 col = (0, 255, 0)
-                lbl = "OWNER"
+                lbl = r.name  # Affiche le nom de l'utilisateur reconnu
             elif r.is_looking:
                 col = (0, 0, 255)  # BGR rouge
                 lbl = "THREAT"
