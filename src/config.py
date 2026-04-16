@@ -91,9 +91,15 @@ class Config:
         else:
             obj = cls()
 
-        # Migration chemin .pkl → .npy
-        if obj.encodings_path.endswith(".pkl"):
-            obj.encodings_path = obj.encodings_path[:-4] + ".npy"
+        # Sprint 2 : TOUJOURS utiliser authorized_users.npz — migration depuis v18
+        # (config.json peut contenir encodings.npy, encodings.pkl, ou un chemin absolu)
+        _enc_dir = os.path.dirname(obj.encodings_path) or os.path.join("data", "owner_faces")
+        obj.encodings_path = os.path.join(_enc_dir, "authorized_users.npz")
+        # Réécrire config.json avec le nouveau path (écrase l'ancienne valeur)
+        try:
+            obj.save()
+        except Exception:
+            pass
 
         # Validation usb_mode / sec_mode (whitelist)
         if obj.usb_mode not in {"DESKTOP", "LAPTOP"}:
@@ -107,6 +113,18 @@ class Config:
         # Initialiser le hash du mot de passe par défaut si vide ("0000")
         if not obj.close_protection_password_hash:
             obj.close_protection_password_hash = hashlib.sha256(b"0000").hexdigest()
+
+        # Résoudre le chemin des encodings en absolu — évite les problèmes de CWD
+        # entre le process parent (enrollment) et le process enfant (restart)
+        if not os.path.isabs(obj.encodings_path):
+            import sys as _sys
+            if getattr(_sys, 'frozen', False):
+                # Frozen exe : relatif au répertoire de l'exe
+                _base = os.path.dirname(_sys.executable)
+            else:
+                # Dev : relatif à la racine du projet (dossier parent de src/)
+                _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            obj.encodings_path = os.path.normpath(os.path.join(_base, obj.encodings_path))
 
         # Auto-profil hardware (si non configuré explicitement dans config.json)
         every_n, scale = cls._hw_profile()
