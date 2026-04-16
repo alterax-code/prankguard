@@ -125,11 +125,13 @@ class PrankGuardApp(ctk.CTk):
         self.watch_bluetooth = ctk.BooleanVar(value=config.watch_bluetooth)
         self.watch_audio = ctk.BooleanVar(value=config.watch_audio)
 
+        # Mode stealth (Sprint 2 — Feature 2)
+        self._stealth_var = ctk.BooleanVar(value=config.stealth_mode)
+
         # Construire l'interface
         self._build_ui()
 
         # Systray — icône couleur temps réel dans la barre de notification
-        self._stealth_var = ctk.BooleanVar(value=config.stealth_mode)
         self._systray = SystrayIcon(
             on_show_hide=lambda: self.after(0, self._toggle_window),
             on_quit=lambda: self.after(0, self._on_close_request),
@@ -1065,7 +1067,6 @@ class PrankGuardApp(ctk.CTk):
         from src.enrollment import EnrollmentWindow
         EnrollmentWindow(
             encodings_path=self.config.encodings_path,
-            on_complete=lambda: PrankGuardApp(self.config).mainloop(),
             username=username,
             encrypt_enabled=self.config.encryption_enabled,
         ).mainloop()
