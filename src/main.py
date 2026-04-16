@@ -70,6 +70,9 @@ def _migrate_npy_to_npz(config) -> None:
 
 def _migrate_pkl_to_npy(encodings_path: str) -> None:
     """Convertit encodings.pkl → encodings.npy si le .pkl existe encore."""
+    # Garde : si le path ne contient pas .npy, la migration pkl→npy est sans objet
+    if ".npy" not in encodings_path:
+        return
     pkl_path = encodings_path.replace(".npy", ".pkl")
     if not Path(pkl_path).exists():
         return
@@ -128,10 +131,9 @@ def main():
     _migrate_npy_to_npz(config)
 
     if not check_enrollment(config.encodings_path):
-        # Lancer l'enrollment puis l'app
+        # Enrollment requis — _finish() relancera le process automatiquement
         EnrollmentWindow(
             encodings_path=config.encodings_path,
-            on_complete=lambda: PrankGuardApp(config).mainloop(),
             encrypt_enabled=config.encryption_enabled,
         ).mainloop()
     else:
