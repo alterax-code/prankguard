@@ -50,6 +50,8 @@ class Config:
     # Fonctionnalités avancées
     anti_spoof_enabled: bool = False
     sound_alarm_enabled: bool = False
+    alarm_sound_path: str = ""      # Vague 4 — chemin .wav personnalisé
+    alarm_volume: int = 80          # Vague 4 — volume alarme (0–100)
     close_protection_enabled: bool = False
     close_protection_password_hash: str = ""
     password_needs_change: bool = True   # Vague 2 — forcer changement au premier lancement

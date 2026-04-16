@@ -43,6 +43,7 @@ from src.security.hardening import (
 from src import audit as _audit
 from src.motion_detector import MotionDetector
 from src import events_db as _edb
+from src import device_inventory as _inventory
 
 
 class _ForcePasswordChangeDialog(ctk.CTkToplevel):
@@ -127,6 +128,49 @@ class _ForcePasswordChangeDialog(ctk.CTkToplevel):
         self._app._on_close()
 
 
+class _PauseDurationDialog(ctk.CTkToplevel):
+    """Dialog de sélection de durée de pause (Vague 4)."""
+
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self._callback = callback
+        self.title("Durée de pause")
+        self.geometry("300x180")
+        self.resizable(False, False)
+        self.grab_set()
+        self.transient(parent)
+        self._build_ui()
+        self.lift()
+        self.focus_force()
+
+    def _build_ui(self):
+        ctk.CTkLabel(
+            self, text="Choisir la durée de pause",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(pady=(20, 12))
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=5)
+
+        ctk.CTkButton(
+            btn_frame, text="15 min", width=80, fg_color="#e67e22",
+            command=lambda: self._select(900)
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            btn_frame, text="1 heure", width=80, fg_color="#e67e22",
+            command=lambda: self._select(3600)
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            btn_frame, text="Manuel", width=80, fg_color="#7f8c8d",
+            command=lambda: self._select(0)
+        ).pack(side="left", padx=6)
+
+    def _select(self, seconds: float):
+        self.grab_release()
+        self.destroy()
+        self._callback(seconds)
+
+
 class PrankGuardApp(ctk.CTk):
     """Application principale PrankGuard."""
 
@@ -195,6 +239,16 @@ class PrankGuardApp(ctk.CTk):
         self.motion_detector = MotionDetector()
         self._last_face_state: str = "NONE"
 
+        # Vague 4 — pause temporisée
+        self._pause_until: float = 0.0
+
+        # Vague 4 — dashboard stats
+        self._fps_counter: int = 0
+        self._fps_last_time: float = time.time()
+        self._fps_current: float = 0.0
+        self._motion_skip_total: int = 0
+        self._motion_skip_skipped: int = 0
+
         # Alertes email SMTP (Sprint 2 — Feature 4)
         self._email_alerter = EmailAlerter(
             smtp_host=config.smtp_host,
@@ -245,6 +299,9 @@ class PrankGuardApp(ctk.CTk):
         self._sync_toggles()
         self.poll_watcher.start()
 
+        # Vague 4 — scan initial (auto-autoriser les périphériques présents au démarrage)
+        threading.Thread(target=_inventory.scan_current, daemon=True).start()
+
         # Cooldown initial (5s pour stabiliser les baselines)
         self.locker.set_device_cooldown(5.0)
         total_enc = sum(len(v) for v in self.authorized_users.values())
@@ -266,6 +323,8 @@ class PrankGuardApp(ctk.CTk):
         self.after(100, self._apply_capture_protection)
         # Forcer changement de mot de passe si nécessaire (Vague 2)
         self.after(200, self._check_force_password_change)
+        # Vague 4 — démarrer le dashboard
+        self.after(3000, self._update_dashboard)
 
     # ── UI ────────────────────────────────────────────────────────────
 
@@ -294,6 +353,7 @@ class PrankGuardApp(ctk.CTk):
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         tab_cam = self.tabs.add("Caméra")
         tab_log = self.tabs.add("Logs")
+        tab_inv = self.tabs.add("Inventaire")
         tab_set = self.tabs.add("Paramètres")
 
         # ── Onglet Caméra ────────────────────────────────────────────
@@ -327,6 +387,19 @@ class PrankGuardApp(ctk.CTk):
             font=ctk.CTkFont(size=18, weight="bold"), text_color="#e74c3c"
         )
         self.countdown_label.pack(side="right", padx=20, pady=10)
+        # Vague 4 — dashboard stats (FPS / skip% / events today)
+        self.dash_events_lbl = ctk.CTkLabel(
+            info_bar, text="Evt: --", font=ctk.CTkFont(size=12), text_color="#888"
+        )
+        self.dash_events_lbl.pack(side="right", padx=8, pady=10)
+        self.dash_skip_lbl = ctk.CTkLabel(
+            info_bar, text="Skip: --", font=ctk.CTkFont(size=12), text_color="#888"
+        )
+        self.dash_skip_lbl.pack(side="right", padx=8, pady=10)
+        self.dash_fps_lbl = ctk.CTkLabel(
+            info_bar, text="FPS: --", font=ctk.CTkFont(size=12), text_color="#888"
+        )
+        self.dash_fps_lbl.pack(side="right", padx=8, pady=10)
 
         # ── Onglet Logs ──────────────────────────────────────────────
         log_frame = ctk.CTkFrame(tab_log, corner_radius=10)
@@ -339,6 +412,34 @@ class PrankGuardApp(ctk.CTk):
             tab_log, text="Effacer", width=100,
             command=lambda: self.log_box.delete("1.0", "end")
         ).pack(pady=(0, 10))
+
+        # ── Onglet Inventaire ────────────────────────────────────────
+        inv_frame = ctk.CTkFrame(tab_inv, corner_radius=10)
+        inv_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        inv_hdr = ctk.CTkFrame(inv_frame, fg_color="transparent")
+        inv_hdr.pack(fill="x", padx=10, pady=(10, 4))
+        ctk.CTkLabel(
+            inv_hdr, text="Inventaire des périphériques",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(side="left")
+        ctk.CTkButton(
+            inv_hdr, text="Actualiser", width=100,
+            command=self._refresh_inventory_ui
+        ).pack(side="right")
+
+        # En-tête colonnes
+        cols_frame = ctk.CTkFrame(inv_frame, fg_color="#1a1a2e", corner_radius=6)
+        cols_frame.pack(fill="x", padx=10, pady=(2, 0))
+        for txt, w in [("Catégorie", 120), ("Nom", 280), ("Statut", 90), ("Action", 90)]:
+            ctk.CTkLabel(
+                cols_frame, text=txt, width=w,
+                font=ctk.CTkFont(size=12, weight="bold"), anchor="w"
+            ).pack(side="left", padx=6, pady=4)
+
+        self._inv_scroll = ctk.CTkScrollableFrame(inv_frame, corner_radius=6)
+        self._inv_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._refresh_inventory_ui()
 
         # ── Onglet Paramètres ────────────────────────────────────────
         scroll = ctk.CTkScrollableFrame(tab_set, corner_radius=10)
@@ -473,6 +574,33 @@ class PrankGuardApp(ctk.CTk):
             scroll, text="Alarme sonore (mode SECURE, intrusion >3s)",
             variable=self._alarm_var, command=self._on_alarm_toggle
         ).pack(anchor="w", padx=40, pady=3)
+
+        # Vague 4 — son personnalisé + volume
+        alarm_sound_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        alarm_sound_frame.pack(fill="x", padx=40, pady=(2, 0))
+        ctk.CTkLabel(alarm_sound_frame, text="Son (.wav):", width=90, anchor="w").pack(side="left")
+        self._alarm_path_var = ctk.StringVar(value=self.config.alarm_sound_path)
+        ctk.CTkEntry(
+            alarm_sound_frame, textvariable=self._alarm_path_var, width=280,
+            placeholder_text="C:\\chemin\\vers\\alarme.wav (vide = bip par défaut)"
+        ).pack(side="left", padx=5)
+        ctk.CTkButton(
+            alarm_sound_frame, text="OK", width=40,
+            command=self._save_alarm_sound
+        ).pack(side="left", padx=4)
+
+        alarm_vol_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        alarm_vol_frame.pack(fill="x", padx=40, pady=(4, 8))
+        self._alarm_vol_label = ctk.CTkLabel(
+            alarm_vol_frame, text=f"Volume: {self.config.alarm_volume}%", width=120, anchor="w"
+        )
+        self._alarm_vol_label.pack(side="left")
+        self._alarm_vol_slider = ctk.CTkSlider(
+            alarm_vol_frame, from_=0, to=100, number_of_steps=20,
+            command=self._on_alarm_volume
+        )
+        self._alarm_vol_slider.set(self.config.alarm_volume)
+        self._alarm_vol_slider.pack(side="left", expand=True, fill="x", padx=(10, 0))
         ctk.CTkSwitch(
             scroll, text="Protection anti-fermeture (mot de passe + watchdog)",
             variable=self._close_protection_var, command=self._on_close_protection_toggle
@@ -818,15 +946,6 @@ class PrankGuardApp(ctk.CTk):
         logger.toggle("Alarme sonore arrêtée")
         _edb.log_event("ALARM_STOP", {})
 
-    def _alarm_loop(self):
-        """Boucle de l'alarme (thread daemon) — bip 2500 Hz jusqu'à arrêt."""
-        while self._alarm_active:
-            try:
-                winsound.Beep(2500, 500)
-            except Exception:
-                pass
-            time.sleep(0.1)
-
     def _on_toggle_change(self):
         """Met à jour les toggles + cooldown 5s."""
         self.locker.set_device_cooldown(5.0)
@@ -881,8 +1000,6 @@ class PrankGuardApp(ctk.CTk):
         # Vérifier cooldowns et toggles
         if self.locker.device_cooldown_active:
             return
-        if self.paused:
-            return
 
         toggle_map = {
             "USB": self.watch_usb, "USB HID": self.watch_usb_hid,
@@ -896,6 +1013,15 @@ class PrankGuardApp(ctk.CTk):
 
         if not self.locker.can_lock():
             return
+
+        # Vague 4 — vérifier inventaire AVANT alerte (périphérique autorisé = silencieux)
+        entry = _inventory.add_or_update(device_type, device_info)
+        self.after(0, self._refresh_inventory_ui)
+        if entry.authorized:
+            logger.info(f"Périphérique autorisé ignoré: {device_type} — {device_info}")
+            _edb.log_event("USB_CONNECTED", {"type": device_type, "info": device_info, "authorized": True})
+            return
+        # Périphérique inconnu — alerte même en pause (sécurité)
 
         # FIX 7 — Bloquer immédiatement selon le type
         if device_type == "Bluetooth":
@@ -963,6 +1089,9 @@ class PrankGuardApp(ctk.CTk):
 
             # FIX 3 — Pause complète
             if self.paused:
+                # Vague 4 — auto-resume si durée écoulée
+                if self._pause_until > 0 and time.time() >= self._pause_until:
+                    self.after(0, self._resume_pause)
                 time.sleep(0.1)
                 continue
 
@@ -992,11 +1121,21 @@ class PrankGuardApp(ctk.CTk):
                 text="CAM: OK", text_color="#2ecc71"
             ))
 
+            # Vague 4 — compteur FPS (fenêtre 3s)
+            self._fps_counter += 1
+            _fps_now = time.time()
+            if _fps_now - self._fps_last_time >= 3.0:
+                self._fps_current = self._fps_counter / (_fps_now - self._fps_last_time)
+                self._fps_counter = 0
+                self._fps_last_time = _fps_now
+
             # FIX 6 + Vague 3 — Analyse 1 frame sur N avec motion pre-filter
             if self.face_analyzer.is_next_analysis_frame():
+                self._motion_skip_total += 1
                 if self.motion_detector.should_analyze(frame):
                     analysis = self.face_analyzer.process_frame(frame)
                 else:
+                    self._motion_skip_skipped += 1
                     self.face_analyzer.tick()
                     analysis = None
             else:
@@ -1192,16 +1331,34 @@ class PrankGuardApp(ctk.CTk):
     # ── Actions ───────────────────────────────────────────────────────
 
     def _toggle_pause(self):
-        """FIX 3 — Pause/Resume de toute l'app."""
-        self.paused = not self.paused
-        self.poll_watcher.paused = self.paused
-        self.usb_watcher.paused = self.paused
+        """Vague 4 — Pause/Resume avec durée temporisée."""
+        if self.paused or time.time() < self._pause_until:
+            self._resume_pause()
+            return
+        self._show_pause_dialog()
 
-        self.pause_btn.configure(
-            text="RESUME" if self.paused else "PAUSE",
-            fg_color="#27ae60" if self.paused else "#f39c12"
-        )
-        logger.info("⏸ En pause" if self.paused else "▶ Reprise")
+    def _show_pause_dialog(self):
+        _PauseDurationDialog(self, callback=self._activate_pause)
+
+    def _activate_pause(self, duration_seconds: float):
+        """Active la pause — les watchers continuent (périphériques inconnus alertent toujours)."""
+        self.paused = True
+        # poll_watcher + usb_watcher NON pausés — sécurité : périphériques inconnus alertent même en pause
+        self._pause_until = time.time() + duration_seconds if duration_seconds > 0 else 0.0
+        self.pause_btn.configure(text="RESUME", fg_color="#27ae60")
+        dur_str = f"{int(duration_seconds)}s" if duration_seconds > 0 else "manuel"
+        logger.info(f"⏸ En pause ({dur_str})")
+        _edb.log_event("PAUSE_STARTED", {"duration": duration_seconds})
+        _audit.log_event("PAUSE_STARTED", {"duration": duration_seconds})
+
+    def _resume_pause(self):
+        """Reprend l'activité normale."""
+        self.paused = False
+        self._pause_until = 0.0
+        self.pause_btn.configure(text="PAUSE", fg_color="#f39c12")
+        logger.info("▶ Reprise")
+        _edb.log_event("PAUSE_ENDED", {})
+        _audit.log_event("PAUSE_ENDED", {})
 
     def _unblock_action(self):
         """Débloque USB manuellement."""
@@ -1356,6 +1513,108 @@ class PrankGuardApp(ctk.CTk):
             self.deiconify()
             self.lift()
             self.focus_force()
+
+    # ── Alarme sonore personnalisée (Vague 4) ────────────────────────
+
+    def _save_alarm_sound(self):
+        path = self._alarm_path_var.get().strip()
+        self.config.update(alarm_sound_path=path)
+        logger.toggle(f"Son alarme → {'bip par défaut' if not path else path}")
+
+    def _on_alarm_volume(self, v):
+        vol = int(v)
+        self.config.update(alarm_volume=vol)
+        self._alarm_vol_label.configure(text=f"Volume: {vol}%")
+
+    def _alarm_loop(self):
+        """Boucle alarme — .wav personnalisé ou bip 2500 Hz."""
+        path = self.config.alarm_sound_path
+        while self._alarm_active:
+            try:
+                if path and os.path.isfile(path) and path.lower().endswith(".wav"):
+                    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    time.sleep(2.0)
+                else:
+                    winsound.Beep(2500, 500)
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    # ── Dashboard (Vague 4) ──────────────────────────────────────────
+
+    def _update_dashboard(self):
+        """Met à jour les stats dashboard toutes les 3s."""
+        if self._closing:
+            return
+        try:
+            self.dash_fps_lbl.configure(text=f"FPS: {self._fps_current:.1f}")
+            skip_pct = (
+                int(self._motion_skip_skipped / self._motion_skip_total * 100)
+                if self._motion_skip_total > 0 else 0
+            )
+            self.dash_skip_lbl.configure(text=f"Skip: {skip_pct}%")
+            midnight = time.mktime(
+                datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timetuple()
+            )
+            evts = _edb.get_events(since=midnight, limit=500)
+            self.dash_events_lbl.configure(text=f"Evt: {len(evts)}")
+        except Exception:
+            pass
+        self.after(3000, self._update_dashboard)
+
+    # ── Inventaire (Vague 4) ─────────────────────────────────────────
+
+    def _refresh_inventory_ui(self):
+        """Reconstruit la liste des périphériques dans l'onglet Inventaire."""
+        if self._closing:
+            return
+        try:
+            for widget in self._inv_scroll.winfo_children():
+                widget.destroy()
+            entries = _inventory.get_all()
+            if not entries:
+                ctk.CTkLabel(
+                    self._inv_scroll, text="Aucun périphérique enregistré",
+                    text_color="#888"
+                ).pack(pady=20)
+                return
+            for entry in sorted(entries, key=lambda e: e.last_seen, reverse=True):
+                row = ctk.CTkFrame(self._inv_scroll, fg_color="transparent")
+                row.pack(fill="x", pady=1)
+                ctk.CTkLabel(
+                    row, text=entry.category, width=120, anchor="w",
+                    font=ctk.CTkFont(size=12)
+                ).pack(side="left", padx=6)
+                ctk.CTkLabel(
+                    row, text=entry.name[:50], width=280, anchor="w",
+                    font=ctk.CTkFont(size=12)
+                ).pack(side="left", padx=6)
+                status_color = "#2ecc71" if entry.authorized else "#e74c3c"
+                status_text = "Autorisé" if entry.authorized else "Inconnu"
+                ctk.CTkLabel(
+                    row, text=status_text, width=90, anchor="w",
+                    font=ctk.CTkFont(size=12), text_color=status_color
+                ).pack(side="left", padx=6)
+                if entry.authorized:
+                    ctk.CTkButton(
+                        row, text="Bloquer", width=80, fg_color="#e74c3c",
+                        command=lambda did=entry.device_id: self._inv_block(did)
+                    ).pack(side="left", padx=6)
+                else:
+                    ctk.CTkButton(
+                        row, text="Autoriser", width=80, fg_color="#27ae60",
+                        command=lambda did=entry.device_id: self._inv_authorize(did)
+                    ).pack(side="left", padx=6)
+        except Exception:
+            pass
+
+    def _inv_authorize(self, device_id: str):
+        _inventory.authorize(device_id)
+        self._refresh_inventory_ui()
+
+    def _inv_block(self, device_id: str):
+        _inventory.block(device_id)
+        self._refresh_inventory_ui()
 
     def _on_close(self):
         """Fermeture propre de l'application."""

@@ -77,6 +77,8 @@ a = Analysis(
         'src.motion_detector',
         'src.events_db',
         'src.hardware_benchmark',
+        # Vague 4
+        'src.device_inventory',
     ],
     hookspath=[],
     hooksconfig={},
