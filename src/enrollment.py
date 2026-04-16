@@ -44,10 +44,9 @@ def check_enrollment(encodings_path: str) -> bool:
     if not os.path.exists(encodings_path):
         return False
     try:
+        from src.crypto import is_encrypted, decrypt_encodings
         raw = open(encodings_path, "rb").read()
-        # Déchiffrer si nécessaire
-        if raw[:4] == b"PGRD":
-            from src.crypto import decrypt_encodings
+        if is_encrypted(raw):
             raw = decrypt_encodings(raw)
         data = np.load(io.BytesIO(raw), allow_pickle=False)
         return any(len(data[k]) > 0 for k in data.files)
