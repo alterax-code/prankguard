@@ -117,10 +117,9 @@ class EnrollmentWindow(ctk.CTkToplevel):
         # Charger les encodings existants pour cet utilisateur si présents
         if os.path.exists(self.encodings_path):
             try:
+                from src.crypto import is_encrypted, decrypt_encodings
                 raw = open(self.encodings_path, "rb").read()
-                # Déchiffrer si nécessaire (fichier chiffré AES-256)
-                if raw[:4] == b"PGRD":
-                    from src.crypto import decrypt_encodings
+                if is_encrypted(raw):
                     raw = decrypt_encodings(raw)
                 data = np.load(io.BytesIO(raw), allow_pickle=False)
                 if username in data.files:
@@ -267,9 +266,9 @@ class EnrollmentWindow(ctk.CTkToplevel):
         existing_users = {}
         if os.path.exists(self.encodings_path):
             try:
+                from src.crypto import is_encrypted, decrypt_encodings
                 raw = open(self.encodings_path, "rb").read()
-                if raw[:4] == b"PGRD":
-                    from src.crypto import decrypt_encodings
+                if is_encrypted(raw):
                     raw = decrypt_encodings(raw)
                 existing_users = load_authorized_users_from_bytes(raw)
             except Exception:
