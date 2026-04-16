@@ -190,6 +190,14 @@ class FaceAnalyzer:
             locs.append((top, right, bottom, left))
         return locs
 
+    def is_next_analysis_frame(self) -> bool:
+        """True si le prochain appel à process_frame() serait un frame d'analyse."""
+        return (self._frame_count + 1) % self.analyze_every_n == 0
+
+    def tick(self) -> None:
+        """Incrémente le compteur sans analyser (motion skip)."""
+        self._frame_count += 1
+
     def draw_on_frame(self, frame: np.ndarray) -> np.ndarray:
         """Dessine les rectangles et labels sur le frame (résultats en cache)."""
         for r in self._last_results:

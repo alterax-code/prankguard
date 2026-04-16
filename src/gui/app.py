@@ -41,6 +41,8 @@ from src.security.hardening import (
     hash_password, verify_password, needs_rehash, set_window_capture_protection,
 )
 from src import audit as _audit
+from src.motion_detector import MotionDetector
+from src import events_db as _edb
 
 
 class _ForcePasswordChangeDialog(ctk.CTkToplevel):
@@ -188,6 +190,10 @@ class PrankGuardApp(ctk.CTk):
         # Rapport d'intrusion
         self._reporter = IntrusionReporter(config.intrusion_log_path)
         self._intrusion_active: bool = False
+
+        # Vague 3 — Motion pre-filter + suivi transitions d'état
+        self.motion_detector = MotionDetector()
+        self._last_face_state: str = "NONE"
 
         # Alertes email SMTP (Sprint 2 — Feature 4)
         self._email_alerter = EmailAlerter(
@@ -612,6 +618,7 @@ class PrankGuardApp(ctk.CTk):
         self.locker.usb_mode = v
         self.mode_lbl.configure(text=f"{v} | {self.config.sec_mode}")
         logger.mode(f"Mode USB → {v}")
+        _edb.log_event("MODE_CHANGED", {"mode": "USB", "value": v})
 
     def _on_sec_mode(self, v):
         """FIX 4 — Change et sauvegarde le mode sécurité."""
@@ -619,6 +626,7 @@ class PrankGuardApp(ctk.CTk):
         self.state_machine.sec_mode = v
         self.mode_lbl.configure(text=f"{self.config.usb_mode} | {v}")
         logger.mode(f"Mode sécurité → {v}")
+        _edb.log_event("MODE_CHANGED", {"mode": "SECURITY", "value": v})
         # Réappliquer la protection anti-capture après changement de mode (Vague 2)
         self.after(50, self._apply_capture_protection)
 
@@ -746,6 +754,7 @@ class PrankGuardApp(ctk.CTk):
             return
 
         self.config.update(encryption_enabled=enabled)
+        _edb.log_event("ENCRYPTION_TOGGLED", {"enabled": enabled})
 
     def _change_password(self):
         """Dialogue pour changer le mot de passe de protection."""
@@ -795,6 +804,7 @@ class PrankGuardApp(ctk.CTk):
         self._alarm_active = True
         self.after(0, lambda: self.stop_alarm_btn.pack(side="right", padx=5, pady=10))
         logger.lock("Alarme sonore déclenchée — intrusion SECURE >3s")
+        _edb.log_event("ALARM_START", {})
         self._alarm_thread = threading.Thread(target=self._alarm_loop, daemon=True)
         self._alarm_thread.start()
 
@@ -806,6 +816,7 @@ class PrankGuardApp(ctk.CTk):
         self._threat_start = None
         self.after(0, lambda: self.stop_alarm_btn.pack_forget())
         logger.toggle("Alarme sonore arrêtée")
+        _edb.log_event("ALARM_STOP", {})
 
     def _alarm_loop(self):
         """Boucle de l'alarme (thread daemon) — bip 2500 Hz jusqu'à arrêt."""
@@ -893,6 +904,7 @@ class PrankGuardApp(ctk.CTk):
             block_network()
 
         logger.device(f"Connexion {device_type} détectée : {device_info} — EN ATTENTE")
+        _edb.log_event("USB_CONNECTED", {"type": device_type, "info": device_info})
         # Notifier le rapport d'intrusion si une intrusion est en cours
         if self._intrusion_active:
             self._reporter.update_current(device=f"{device_type}:{device_info}")
@@ -926,6 +938,7 @@ class PrankGuardApp(ctk.CTk):
         logger.device(f"{device_type} BLOQUÉ — verrouillage du poste")
         self.locker.set_device_cooldown(10.0)
         self.locker.do_lock(f"Nouveau {device_type} bloqué")
+        _edb.log_event("LOCK_TRIGGERED", {"reason": f"Nouveau {device_type} bloqué"})
         self._update_usb_label()
 
     def _update_usb_label(self):
@@ -979,13 +992,37 @@ class PrankGuardApp(ctk.CTk):
                 text="CAM: OK", text_color="#2ecc71"
             ))
 
-            # FIX 6 — Analyse 1 frame sur N, affichage de tous les frames
-            analysis = self.face_analyzer.process_frame(frame)
+            # FIX 6 + Vague 3 — Analyse 1 frame sur N avec motion pre-filter
+            if self.face_analyzer.is_next_analysis_frame():
+                if self.motion_detector.should_analyze(frame):
+                    analysis = self.face_analyzer.process_frame(frame)
+                else:
+                    self.face_analyzer.tick()
+                    analysis = None
+            else:
+                analysis = self.face_analyzer.process_frame(frame)
 
             if analysis is not None:
                 # Frame d'analyse — mettre à jour la state machine
                 situation = self.face_analyzer.get_situation()
                 result = self.state_machine.update(situation, self.locker.can_lock())
+
+                # Vague 3 — Transitions d'état faciale (events_db)
+                if situation["owner"] and not situation["threat"]:
+                    _new_face = "OWNER"
+                elif situation["threat"]:
+                    _new_face = "UNKNOWN"
+                elif not self.face_analyzer.last_results:
+                    _new_face = "NONE"
+                else:
+                    _new_face = "PASSING"
+                if _new_face != self._last_face_state:
+                    _edb.log_event(f"FACE_{_new_face}", {
+                        "prev": self._last_face_state,
+                        "face_count": situation["face_count"],
+                    })
+                    self._last_face_state = _new_face
+                self.motion_detector.set_owner_safe(_new_face == "OWNER")
 
                 # Afficher info visage
                 self.after(0, lambda i=situation["info"]: self.face_info.configure(text=i))
@@ -1003,6 +1040,7 @@ class PrankGuardApp(ctk.CTk):
                 # Vérifier si on doit locker
                 if result["should_lock"]:
                     self.locker.do_lock(result["lock_reason"])
+                    _edb.log_event("LOCK_TRIGGERED", {"reason": result["lock_reason"]})
                     self.after(0, self._update_usb_label)
                     time.sleep(2)
                     continue
@@ -1168,6 +1206,7 @@ class PrankGuardApp(ctk.CTk):
     def _unblock_action(self):
         """Débloque USB manuellement."""
         self.locker.do_unlock()
+        _edb.log_event("UNLOCK", {"source": "manual"})
         self.locker.set_device_cooldown(5.0)
         self.poll_watcher.reset_baselines()
         self._update_usb_label()
@@ -1219,6 +1258,7 @@ class PrankGuardApp(ctk.CTk):
             analyze_every_n=self.config.analyze_every_n_frames,
             detection_scale=self.config.detection_scale,
         )
+        self.motion_detector.reset()
         self._refresh_users_ui()
         total_enc = sum(len(v) for v in self.authorized_users.values())
         logger.info(

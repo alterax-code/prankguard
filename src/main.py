@@ -68,6 +68,20 @@ def main():
 
     config = Config.load()
 
+    # Vague 3 — Nettoyage des anciens événements SQLite (> 90 jours)
+    try:
+        from src import events_db as _edb
+        _edb.cleanup_old_events(90)
+    except Exception:
+        pass
+
+    # Vague 3 — Benchmark hardware au premier lancement
+    try:
+        from src.hardware_benchmark import run_benchmark
+        run_benchmark(config)
+    except Exception:
+        pass
+
     if config.close_protection_enabled:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         subprocess.Popen(

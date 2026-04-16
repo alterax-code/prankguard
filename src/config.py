@@ -44,6 +44,9 @@ class Config:
     # Profil hardware (auto-détecté au démarrage si non configuré explicitement)
     detection_scale: float = 0.33   # Facteur de downscale pour la détection (0.25–0.5)
 
+    # Benchmark hardware (Vague 3 — calibration au premier lancement)
+    hardware_benchmarked: bool = False
+
     # Fonctionnalités avancées
     anti_spoof_enabled: bool = False
     sound_alarm_enabled: bool = False

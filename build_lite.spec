@@ -73,6 +73,10 @@ a = Analysis(
         'src.audit',
         'src.watchdog',
         'src.security.hardening',
+        # Vague 3
+        'src.motion_detector',
+        'src.events_db',
+        'src.hardware_benchmark',
     ],
     hookspath=[],
     hooksconfig={},
