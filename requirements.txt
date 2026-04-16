@@ -10,3 +10,4 @@ wmi>=1.5.1
 setuptools<71
 pystray>=0.19.0
 cryptography>=41.0.0
+argon2-cffi>=23.1.0

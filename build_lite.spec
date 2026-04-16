@@ -60,6 +60,9 @@ a = Analysis(
         'cryptography.hazmat.backends',
         'cryptography.hazmat.backends.openssl',
         'cryptography.hazmat.backends.openssl.backend',
+        # Argon2id (Vague 2)
+        'argon2', 'argon2.low_level',
+        'argon2._utils', 'argon2.exceptions',
         # Modules src/
         'src.paths',
         'src.systray',
@@ -67,7 +70,9 @@ a = Analysis(
         'src.intrusion_report',
         'src.email_alert',
         'src.crypto',
+        'src.audit',
         'src.watchdog',
+        'src.security.hardening',
     ],
     hookspath=[],
     hooksconfig={},

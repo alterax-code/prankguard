@@ -8,7 +8,6 @@ FIX 7 — Notifications device (popup au lieu de lock direct).
 FIX 9 — Layout responsive (grid + redimensionnement caméra).
 """
 import cv2
-import hashlib
 import numpy as np
 import os
 import time
@@ -38,6 +37,92 @@ from src.devices.blocker import (
     block_bluetooth, unblock_bluetooth,
     block_network, unblock_network,
 )
+from src.security.hardening import (
+    hash_password, verify_password, needs_rehash, set_window_capture_protection,
+)
+from src import audit as _audit
+
+
+class _ForcePasswordChangeDialog(ctk.CTkToplevel):
+    """Dialog modal bloquant — force le changement du mot de passe par défaut."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._app = parent
+        self.title("PrankGuard — Changement de mot de passe requis")
+        self.geometry("440x300")
+        self.resizable(False, False)
+        self.grab_set()
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_dialog)
+        self._build_ui()
+        self.lift()
+        self.focus_force()
+
+    def _build_ui(self):
+        ctk.CTkLabel(
+            self, text="Changement de mot de passe requis",
+            font=ctk.CTkFont(size=17, weight="bold"),
+        ).pack(pady=(20, 4))
+        ctk.CTkLabel(
+            self,
+            text="Le mot de passe par défaut doit être modifié\navant d'utiliser PrankGuard.",
+            font=ctk.CTkFont(size=12), justify="center",
+        ).pack(pady=(0, 10))
+
+        self._pwd_entry = ctk.CTkEntry(
+            self, placeholder_text="Nouveau mot de passe", show="*", width=290
+        )
+        self._pwd_entry.pack(pady=4)
+
+        self._confirm_entry = ctk.CTkEntry(
+            self, placeholder_text="Confirmer le mot de passe", show="*", width=290
+        )
+        self._confirm_entry.pack(pady=4)
+
+        self._error_lbl = ctk.CTkLabel(
+            self, text="", font=ctk.CTkFont(size=11), text_color="#e74c3c"
+        )
+        self._error_lbl.pack(pady=2)
+
+        ctk.CTkLabel(
+            self, text="Min. 8 caractères · 1 majuscule · 1 chiffre",
+            font=ctk.CTkFont(size=11), text_color="#888",
+        ).pack(pady=2)
+
+        ctk.CTkButton(self, text="Valider", width=200, command=self._submit).pack(pady=10)
+        self.bind("<Return>", lambda _: self._submit())
+
+    @staticmethod
+    def _validate(pwd: str) -> str:
+        if len(pwd) < 8:
+            return "Minimum 8 caractères requis"
+        if not any(c.isupper() for c in pwd):
+            return "Au moins 1 majuscule requise"
+        if not any(c.isdigit() for c in pwd):
+            return "Au moins 1 chiffre requis"
+        return ""
+
+    def _submit(self):
+        pwd     = self._pwd_entry.get()
+        confirm = self._confirm_entry.get()
+        if pwd != confirm:
+            self._error_lbl.configure(text="Les mots de passe ne correspondent pas")
+            return
+        err = self._validate(pwd)
+        if err:
+            self._error_lbl.configure(text=err)
+            return
+        self._app.config.update(
+            close_protection_password_hash=hash_password(pwd),
+            password_needs_change=False,
+        )
+        _audit.log_event("PASSWORD_CHANGED", {"forced": True})
+        self.destroy()
+
+    def _on_close_dialog(self):
+        """Fermer le dialog = fermer l'application."""
+        self._app._on_close()
 
 
 class PrankGuardApp(ctk.CTk):
@@ -138,9 +223,10 @@ class PrankGuardApp(ctk.CTk):
             on_quit=lambda: self.after(0, self._on_close_request),
         )
         self._systray.start()
-        # Mode stealth : masquer la fenêtre au démarrage si activé
+        # Mode stealth : afficher brièvement puis masquer (flash de confirmation)
         if config.stealth_mode:
-            self.after(200, self.withdraw)
+            logger.info("Mode stealth actif — fenêtre masquée dans 1.5s (accès via systray)")
+            self.after(1500, self.withdraw)
 
         # Brancher le logger sur la GUI
         logger.set_gui_callback(self._log_to_gui)
@@ -160,12 +246,20 @@ class PrankGuardApp(ctk.CTk):
             f"PrankGuard v2.0 démarré — {total_enc} visages, "
             f"{len(self.authorized_users)} utilisateur(s): {list(self.authorized_users.keys())}"
         )
+        try:
+            _audit.log_event("APP_START", {"users": list(self.authorized_users.keys())})
+        except Exception as exc:
+            logger.error(f"Audit APP_START: erreur — {exc}")
 
         # Threads
         threading.Thread(target=self._camera_loop, daemon=True).start()
         threading.Thread(target=self._keyboard_listener, daemon=True).start()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
+        # Anti-capture d'écran (Vague 2)
+        self.after(100, self._apply_capture_protection)
+        # Forcer changement de mot de passe si nécessaire (Vague 2)
+        self.after(200, self._check_force_password_change)
 
     # ── UI ────────────────────────────────────────────────────────────
 
@@ -525,6 +619,26 @@ class PrankGuardApp(ctk.CTk):
         self.state_machine.sec_mode = v
         self.mode_lbl.configure(text=f"{self.config.usb_mode} | {v}")
         logger.mode(f"Mode sécurité → {v}")
+        # Réappliquer la protection anti-capture après changement de mode (Vague 2)
+        self.after(50, self._apply_capture_protection)
+
+    def _apply_capture_protection(self):
+        """Applique la protection anti-capture d'écran (WDA_EXCLUDEFROMCAPTURE)."""
+        try:
+            set_window_capture_protection(self.winfo_id())
+        except Exception as exc:
+            logger.error(f"Anti-capture: erreur SetWindowDisplayAffinity — {exc}")
+
+    def _check_force_password_change(self):
+        """Ouvre le dialog de changement forcé si le mot de passe est encore par défaut."""
+        try:
+            stored = self.config.close_protection_password_hash
+            is_default = verify_password("0000", stored)
+            if not self.config.password_needs_change and not is_default:
+                return
+            _ForcePasswordChangeDialog(self)
+        except Exception as exc:
+            logger.error(f"Force password change check: erreur — {exc}")
 
     def _on_face_size(self, v):
         self.face_analyzer.min_face_size = v / 100
@@ -626,7 +740,7 @@ class PrankGuardApp(ctk.CTk):
                     f.write(raw)
                 logger.toggle("Encodings déchiffrés")
         except Exception as exc:
-            logger.warning(f"Erreur chiffrement/déchiffrement: {exc}")
+            logger.error(f"Erreur chiffrement/déchiffrement: {exc}")
             # Remettre le switch à son état précédent
             self._encrypt_var.set(not enabled)
             return
@@ -636,16 +750,23 @@ class PrankGuardApp(ctk.CTk):
     def _change_password(self):
         """Dialogue pour changer le mot de passe de protection."""
         dialog = ctk.CTkInputDialog(
-            text="Nouveau mot de passe (laisser vide = 0000):",
+            text="Nouveau mot de passe (min 8 chars, 1 majuscule, 1 chiffre):",
             title="Changer le mot de passe"
         )
         new_pwd = dialog.get_input()
         if new_pwd is None:
-            return  # Annulé
-        if not new_pwd:
-            new_pwd = "0000"
-        h = hashlib.sha256(new_pwd.encode()).hexdigest()
-        self.config.update(close_protection_password_hash=h)
+            return
+        # Validation
+        if (len(new_pwd) < 8
+                or not any(c.isupper() for c in new_pwd)
+                or not any(c.isdigit() for c in new_pwd)):
+            logger.info("Mot de passe invalide — min 8 chars, 1 majuscule, 1 chiffre")
+            return
+        self.config.update(
+            close_protection_password_hash=hash_password(new_pwd),
+            password_needs_change=False,
+        )
+        _audit.log_event("PASSWORD_CHANGED", {"forced": False})
         logger.toggle("Mot de passe de protection modifié")
 
     def _log_intrusion_event(self, event):
@@ -665,7 +786,7 @@ class PrankGuardApp(ctk.CTk):
         if event.pending_email and self.config.email_enabled:
             sent = self._email_alerter.send_critical_alert(event)
             msg += " | EMAIL" if sent else " | EMAIL (rate-limit)"
-        logger.warning(msg) if event.criticality != Criticality.INFO else logger.info(msg)
+        logger.error(msg) if event.criticality != Criticality.INFO else logger.info(msg)
 
     def _start_alarm(self):
         """Démarre l'alarme sonore dans un thread daemon."""
@@ -673,7 +794,7 @@ class PrankGuardApp(ctk.CTk):
             return
         self._alarm_active = True
         self.after(0, lambda: self.stop_alarm_btn.pack(side="right", padx=5, pady=10))
-        logger.warning("Alarme sonore déclenchée — intrusion SECURE >3s")
+        logger.lock("Alarme sonore déclenchée — intrusion SECURE >3s")
         self._alarm_thread = threading.Thread(target=self._alarm_loop, daemon=True)
         self._alarm_thread.start()
 
@@ -904,7 +1025,7 @@ class PrankGuardApp(ctk.CTk):
                             self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
                                 text=t, text_color="#e74c3c"
                             ))
-                            logger.warning(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
+                            logger.face(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
                         else:
                             spoof_txt = f"LIVE blinks:{spoof_result['blink_count']}"
                             self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
@@ -1174,12 +1295,18 @@ class PrankGuardApp(ctk.CTk):
         )
         password = dialog.get_input()
         if password is None:
-            return  # Annulé par l'utilisateur
-        h = hashlib.sha256(password.encode()).hexdigest()
-        if h == self.config.close_protection_password_hash:
+            return
+        stored = self.config.close_protection_password_hash
+        if verify_password(password, stored):
+            # Migration transparente SHA-256 → argon2id si nécessaire
+            if needs_rehash(stored):
+                self.config.update(
+                    close_protection_password_hash=hash_password(password),
+                    password_needs_change=False,
+                )
             self._on_close()
         else:
-            logger.warning("Protection anti-fermeture: mot de passe incorrect")
+            logger.info("Protection anti-fermeture: mot de passe incorrect")
 
     def _toggle_window(self):
         """Bascule la visibilité de la fenêtre principale (systray double-clic)."""
@@ -1192,6 +1319,7 @@ class PrankGuardApp(ctk.CTk):
 
     def _on_close(self):
         """Fermeture propre de l'application."""
+        _audit.log_event("APP_STOP", {})
         self._closing = True
         self.running = False
         self._alarm_active = False  # Arrêter l'alarme si active

@@ -2,8 +2,8 @@
 Configuration persistante JSON.
 FIX 4 — Modes Pedago/Secure sauvegardés.
 FIX 5 — Modes Desktop/Laptop sauvegardés.
+Vague 2 — password_needs_change + hash argon2id par défaut.
 """
-import hashlib
 import json
 import os
 from dataclasses import dataclass, field, asdict
@@ -49,6 +49,7 @@ class Config:
     sound_alarm_enabled: bool = False
     close_protection_enabled: bool = False
     close_protection_password_hash: str = ""
+    password_needs_change: bool = True   # Vague 2 — forcer changement au premier lancement
     intrusion_log_path: str = field(default_factory=lambda: str(_paths.INTRUSION_LOG))
 
     # Mode stealth (Sprint 2 — Feature 2)
@@ -99,9 +100,21 @@ class Config:
         # Clamp face_tolerance entre 0.1 et 0.9
         obj.face_tolerance = max(0.1, min(0.9, float(obj.face_tolerance)))
 
-        # Initialiser le hash du mot de passe par défaut si vide ("0000")
+        # Initialiser le hash du mot de passe par défaut si vide ("0000" → argon2id)
         if not obj.close_protection_password_hash:
-            obj.close_protection_password_hash = hashlib.sha256(b"0000").hexdigest()
+            from src.security.hardening import hash_password
+            obj.close_protection_password_hash = hash_password("0000")
+            obj.password_needs_change = True
+        # Hash corrompu (non-argon2) — réinitialiser proprement
+        elif not obj.close_protection_password_hash.startswith("$argon2"):
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Config: close_protection_password_hash corrompu (format non-argon2) — "
+                "réinitialisation sur '0000'."
+            )
+            from src.security.hardening import hash_password
+            obj.close_protection_password_hash = hash_password("0000")
+            obj.password_needs_change = True
 
         # Auto-profil hardware (si non configuré explicitement dans config.json)
         every_n, scale = cls._hw_profile()
@@ -109,6 +122,14 @@ class Config:
             obj.analyze_every_n_frames = every_n
         if "detection_scale" not in explicit_keys:
             obj.detection_scale = scale
+
+        # Persister immédiatement si le fichier n'existe pas (première exécution)
+        # ou si des valeurs par défaut ont été injectées (password hash, etc.)
+        try:
+            if not os.path.exists(str(_paths.CONFIG_FILE)):
+                obj.save()
+        except Exception:
+            pass
 
         return obj
 
