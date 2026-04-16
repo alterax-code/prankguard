@@ -47,7 +47,6 @@ def elevate():
 
 def main():
     """Lancement principal : admin check → migration → enrollment check → app."""
-    print(f"[DEBUG] PrankGuard démarrage PID={os.getpid()}")
     # FIX 1 — Demander les droits admin si pas déjà admin
     if not is_admin():
         print("[PrankGuard] Droits admin requis — lancement UAC...")
@@ -69,14 +68,13 @@ def main():
 
     config = Config.load()
 
-    # DEBUG — watchdog désactivé temporairement (fork bomb investigation)
-    # if config.close_protection_enabled:
-    #     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    #     subprocess.Popen(
-    #         [sys.executable, "-m", "src.watchdog", str(os.getpid()), project_root],
-    #         cwd=project_root,
-    #         creationflags=subprocess.CREATE_NO_WINDOW,
-    #     )
+    if config.close_protection_enabled:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        subprocess.Popen(
+            [sys.executable, "-m", "src.watchdog", str(os.getpid()), project_root],
+            cwd=project_root,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
 
     if not check_enrollment(config.encodings_path):
         # Enrollment requis — CTk temp root + CTkToplevel

@@ -53,3 +53,6 @@ CLAUDE.local.md
 
 # Guides de développement internes
 GUIDE_CLAUDE_CODE_PRANKGUARD_v2.md
+
+# Outils de debug/test locaux
+src/diagnostic.py
