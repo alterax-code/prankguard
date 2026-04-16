@@ -60,7 +60,8 @@ a = Analysis(
         'cryptography.hazmat.backends',
         'cryptography.hazmat.backends.openssl',
         'cryptography.hazmat.backends.openssl.backend',
-        # Modules src/ Sprint 2
+        # Modules src/
+        'src.paths',
         'src.systray',
         'src.anti_spoof',
         'src.intrusion_report',

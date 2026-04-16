@@ -8,8 +8,9 @@ import logging
 from datetime import datetime
 from typing import Optional, Callable
 
+from src import paths
 
-LOG_DIR = os.path.join(os.path.expanduser("~"), ".prankguard", "logs")
+LOG_DIR = str(paths.LOGS_DIR)
 
 # Icônes par catégorie
 ICONS = {

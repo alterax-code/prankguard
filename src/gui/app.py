@@ -19,6 +19,7 @@ import customtkinter as ctk
 from PIL import Image
 from datetime import datetime
 
+from src import paths
 from src.config import Config
 from src.logger import logger
 from src.face_analyzer import FaceAnalyzer
@@ -1056,20 +1057,53 @@ class PrankGuardApp(ctk.CTk):
         self._do_enrollment("owner")
 
     def _do_enrollment(self, username: str):
-        """Ouvre la fenêtre d'enrollment pour un utilisateur donné."""
-        self._closing = True
-        self.running = False
-        self.usb_watcher.stop()
-        self.poll_watcher.stop()
-        self._systray.stop()
-        self.destroy()
-
+        """Pause caméra → enrollment CTkToplevel → reload utilisateurs."""
         from src.enrollment import EnrollmentWindow
-        EnrollmentWindow(
+
+        self.running = False  # Arrêter la boucle caméra
+
+        def _on_success():
+            self._reload_users()
+            self.running = True
+            threading.Thread(target=self._camera_loop, daemon=True).start()
+
+        def _on_cancel():
+            self.running = True
+            threading.Thread(target=self._camera_loop, daemon=True).start()
+
+        # Ouvrir après 200ms (laisse le thread caméra libérer VideoCapture)
+        self.after(200, lambda: EnrollmentWindow(
+            parent=self,
             encodings_path=self.config.encodings_path,
             username=username,
             encrypt_enabled=self.config.encryption_enabled,
-        ).mainloop()
+            on_success=_on_success,
+            on_cancel=_on_cancel,
+        ))
+
+    def _reload_users(self):
+        """Recharge les utilisateurs autorisés depuis le fichier d'encodings."""
+        try:
+            raw = open(self.config.encodings_path, "rb").read()
+            if is_encrypted(raw):
+                raw = decrypt_encodings(raw)
+            self.authorized_users = load_authorized_users_from_bytes(raw)
+        except Exception:
+            pass
+        self.face_analyzer = FaceAnalyzer(
+            authorized_users=self.authorized_users,
+            tolerance=self.config.face_tolerance,
+            min_face_size=self.config.min_face_size,
+            center_threshold=self.config.center_threshold,
+            analyze_every_n=self.config.analyze_every_n_frames,
+            detection_scale=self.config.detection_scale,
+        )
+        self._refresh_users_ui()
+        total_enc = sum(len(v) for v in self.authorized_users.values())
+        logger.info(
+            f"Utilisateurs rechargés — {total_enc} visages, "
+            f"{list(self.authorized_users.keys())}"
+        )
 
     def _refresh_users_ui(self):
         """Reconstruit la liste des utilisateurs dans l'onglet Paramètres."""
@@ -1168,10 +1202,7 @@ class PrankGuardApp(ctk.CTk):
             self._reporter.end_intrusion()
         # Écrire le flag watchdog avant la destruction
         try:
-            flag_dir = os.path.join(os.path.expanduser("~"), ".prankguard")
-            os.makedirs(flag_dir, exist_ok=True)
-            flag_path = os.path.join(flag_dir, "watchdog_shutdown.flag")
-            with open(flag_path, "w") as f:
+            with open(str(paths.SHUTDOWN_FLAG), "w") as f:
                 f.write("ok")
         except Exception:
             pass

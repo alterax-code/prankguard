@@ -10,9 +10,11 @@ import subprocess
 import sys
 import time
 
+from src import paths
+
 # Fichier-flag posé par l'app lors d'une fermeture normale
-SHUTDOWN_FLAG = os.path.join(os.path.expanduser("~"), ".prankguard", "watchdog_shutdown.flag")
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".prankguard", "config.json")
+SHUTDOWN_FLAG = str(paths.SHUTDOWN_FLAG)
+CONFIG_FILE = str(paths.CONFIG_FILE)
 
 PROCESS_QUERY_INFORMATION = 0x0400
 STILL_ACTIVE = 259

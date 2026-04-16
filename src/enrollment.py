@@ -2,6 +2,7 @@
 Fenêtre d'enrollment facial.
 FIX 10 — Minimum 15 photos, tips dynamiques, barre de progression sur 30.
 """
+import io
 import os
 import cv2
 import face_recognition
@@ -9,10 +10,10 @@ import numpy as np
 import time
 import threading
 import winsound
+from typing import Callable, Optional
 
 import customtkinter as ctk
 from PIL import Image
-from typing import Callable
 
 
 # Tips qui changent pendant la capture
@@ -43,7 +44,6 @@ def check_enrollment(encodings_path: str) -> bool:
     if not os.path.exists(encodings_path):
         return False
     try:
-        import io
         raw = open(encodings_path, "rb").read()
         # Déchiffrer si nécessaire
         if raw[:4] == b"PGRD":
@@ -69,7 +69,6 @@ def load_authorized_users_from_bytes(raw: bytes) -> dict:
     Charge les utilisateurs depuis des bytes (après déchiffrement en mémoire).
     Retourne {nom: ndarray(N, 128)}.
     """
-    import io
     buf = io.BytesIO(raw)
     data = np.load(buf, allow_pickle=False)
     return {name: data[name] for name in data.files}
@@ -84,24 +83,29 @@ def save_authorized_users(path: str, users: dict) -> None:
     np.savez(path, **users)
 
 
-class EnrollmentWindow(ctk.CTk):
+class EnrollmentWindow(ctk.CTkToplevel):
     """Fenêtre de capture de visages pour l'enrollment d'un utilisateur."""
 
     def __init__(
         self,
+        parent,
         encodings_path: str,
-        on_complete: Callable,
         username: str = "owner",
         encrypt_enabled: bool = False,
+        on_success: Optional[Callable] = None,
+        on_cancel: Optional[Callable] = None,
     ):
-        super().__init__()
+        super().__init__(parent)
         self.encodings_path = encodings_path
-        self.on_complete = on_complete
         self.username = username
         self.encrypt_enabled = encrypt_enabled
+        self.on_success = on_success
+        self.on_cancel = on_cancel
+
         self.title(f"PrankGuard — Enrollment ({username})")
         self.geometry("720x600")
         self.resizable(False, False)
+        self.grab_set()  # Modal — focus exclusif sur cette fenêtre
 
         self.encodings = []
         self.cap = None
@@ -113,7 +117,6 @@ class EnrollmentWindow(ctk.CTk):
         # Charger les encodings existants pour cet utilisateur si présents
         if os.path.exists(self.encodings_path):
             try:
-                import io
                 raw = open(self.encodings_path, "rb").read()
                 # Déchiffrer si nécessaire (fichier chiffré AES-256)
                 if raw[:4] == b"PGRD":
@@ -218,6 +221,7 @@ class EnrollmentWindow(ctk.CTk):
 
         if self.cap:
             self.cap.release()
+            self.cap = None
 
     def _capture(self):
         """Capture une photo et extrait l'encoding facial."""
@@ -256,8 +260,7 @@ class EnrollmentWindow(ctk.CTk):
             self.tip_label.configure(text=CAPTURE_TIPS[tip_idx])
 
     def _finish(self):
-        """Sauvegarde les encodings (format .npz multi-utilisateurs) et lance l'app."""
-        import io
+        """Sauvegarde les encodings (format .npz multi-utilisateurs) et appelle on_success."""
         arr = np.array(self.encodings) if self.encodings else np.empty((0, 128), dtype=np.float64)
 
         # Charger les utilisateurs existants pour ne pas écraser les autres
@@ -289,13 +292,16 @@ class EnrollmentWindow(ctk.CTk):
 
         self._closing = True
         self.running = False
-        time.sleep(0.3)
+        time.sleep(0.3)  # Laisser le thread caméra libérer VideoCapture
         self.destroy()
-        self.on_complete()
+        if self.on_success:
+            self.on_success()
 
     def _on_close(self):
-        """Fermeture propre."""
+        """Fermeture propre — appelle on_cancel."""
         self._closing = True
         self.running = False
         time.sleep(0.2)
         self.destroy()
+        if self.on_cancel:
+            self.on_cancel()
