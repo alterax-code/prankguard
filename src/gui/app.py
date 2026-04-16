@@ -44,6 +44,10 @@ from src import audit as _audit
 from src.motion_detector import MotionDetector
 from src import events_db as _edb
 from src import device_inventory as _inventory
+import face_recognition
+from src.challenge_response import ChallengeResponse
+from src.network_monitor import SSIDMonitor
+from src.watchdog import WatchdogThread, start_external_watchdog
 
 
 class _ForcePasswordChangeDialog(ctk.CTkToplevel):
@@ -249,6 +253,17 @@ class PrankGuardApp(ctk.CTk):
         self._motion_skip_total: int = 0
         self._motion_skip_skipped: int = 0
 
+        # Vague 5 — Challenge-response anti-spoof
+        self._challenge_response = ChallengeResponse()
+        self._challenge_response_var = ctk.BooleanVar(value=config.challenge_response_enabled)
+
+        # Vague 5 — SSID monitoring
+        self._ssid_monitor = SSIDMonitor()
+        self._watch_ssid_var = ctk.BooleanVar(value=config.watch_ssid)
+
+        # Vague 5 — Watchdog
+        self._watchdog = WatchdogThread()
+
         # Alertes email SMTP (Sprint 2 — Feature 4)
         self._email_alerter = EmailAlerter(
             smtp_host=config.smtp_host,
@@ -326,6 +341,17 @@ class PrankGuardApp(ctk.CTk):
         # Vague 4 — démarrer le dashboard
         self.after(3000, self._update_dashboard)
 
+        # Vague 5 — Watchdog heartbeat + externe
+        self._watchdog.start()
+        try:
+            start_external_watchdog()
+        except Exception as exc:
+            logger.error(f"Watchdog externe: erreur démarrage — {exc}")
+
+        # Vague 5 — SSID monitoring
+        if config.watch_ssid:
+            self._ssid_monitor.start(self, self._on_ssid_change)
+
     # ── UI ────────────────────────────────────────────────────────────
 
     def _build_ui(self):
@@ -402,16 +428,37 @@ class PrankGuardApp(ctk.CTk):
         self.dash_fps_lbl.pack(side="right", padx=8, pady=10)
 
         # ── Onglet Logs ──────────────────────────────────────────────
+        # Vague 5 — analytics section
+        stats_frame = ctk.CTkFrame(tab_log, corner_radius=10, height=90)
+        stats_frame.pack(fill="x", padx=10, pady=(10, 4))
+        stats_frame.pack_propagate(False)
+        self._stats_labels: dict = {}
+        for key in ["Locks", "Face_Owner", "Face_Unknown", "Alarms", "USB"]:
+            f = ctk.CTkFrame(stats_frame, fg_color="transparent")
+            f.pack(side="left", expand=True, padx=8, pady=8)
+            ctk.CTkLabel(f, text=key, font=ctk.CTkFont(size=11), text_color="#888").pack()
+            lbl = ctk.CTkLabel(f, text="--", font=ctk.CTkFont(size=22, weight="bold"))
+            lbl.pack()
+            self._stats_labels[key] = lbl
+        self.after(500, self._update_stats_section)
+
         log_frame = ctk.CTkFrame(tab_log, corner_radius=10)
-        log_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=4)
         self.log_box = ctk.CTkTextbox(
             log_frame, font=ctk.CTkFont(family="Consolas", size=12)
         )
         self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
+
+        btn_row = ctk.CTkFrame(tab_log, fg_color="transparent")
+        btn_row.pack(pady=(0, 10))
         ctk.CTkButton(
-            tab_log, text="Effacer", width=100,
+            btn_row, text="Effacer", width=100,
             command=lambda: self.log_box.delete("1.0", "end")
-        ).pack(pady=(0, 10))
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            btn_row, text="Exporter CSV", width=120, fg_color="#2980b9",
+            command=self._export_csv
+        ).pack(side="left", padx=6)
 
         # ── Onglet Inventaire ────────────────────────────────────────
         inv_frame = ctk.CTkFrame(tab_inv, corner_radius=10)
@@ -524,6 +571,8 @@ class PrankGuardApp(ctk.CTk):
                        command=self._on_toggle_change).pack(anchor="w", pady=3)
         ctk.CTkSwitch(right_col, text="Audio", variable=self.watch_audio,
                        command=self._on_toggle_change).pack(anchor="w", pady=3)
+        ctk.CTkSwitch(right_col, text="SSID WiFi (changement réseau)", variable=self._watch_ssid_var,
+                       command=self._on_watch_ssid_toggle).pack(anchor="w", pady=3)
 
         # Seuils
         ctk.CTkLabel(
@@ -569,6 +618,10 @@ class PrankGuardApp(ctk.CTk):
         ctk.CTkSwitch(
             scroll, text="Anti-spoofing (détection de blink)",
             variable=self._anti_spoof_var, command=self._on_anti_spoof_toggle
+        ).pack(anchor="w", padx=40, pady=3)
+        ctk.CTkSwitch(
+            scroll, text="Challenge-response anti-spoof (pose vérification)",
+            variable=self._challenge_response_var, command=self._on_challenge_response_toggle
         ).pack(anchor="w", padx=40, pady=3)
         ctk.CTkSwitch(
             scroll, text="Alarme sonore (mode SECURE, intrusion >3s)",
@@ -1203,14 +1256,41 @@ class PrankGuardApp(ctk.CTk):
                                 text=t, text_color="#e74c3c"
                             ))
                             logger.face(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
+                            # Vague 5 — challenge-response si activé
+                            if (self._challenge_response_var.get()
+                                    and not self._challenge_response.is_active()):
+                                triggered = self._challenge_response.update_ear(
+                                    spoof_result.get("ear_left", 0.3),
+                                    spoof_result.get("ear_right", 0.3),
+                                )
+                                if triggered:
+                                    self._challenge_response.start_challenge()
+                                    logger.face("Challenge-response démarré")
                         else:
                             spoof_txt = f"LIVE blinks:{spoof_result['blink_count']}"
                             self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
                                 text=t, text_color="#2ecc71"
                             ))
+
+                        # Vague 5 — valider le challenge si actif
+                        if self._challenge_response.is_active():
+                            lm_list = face_recognition.face_landmarks(
+                                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                                [owner_faces[0].location]
+                            )
+                            if lm_list:
+                                passed = self._challenge_response.validate_pose(lm_list[0])
+                                if passed:
+                                    logger.face("Challenge-response validé — owner confirmé LIVE")
+                                    self._anti_spoof.reset()
+                            if self._challenge_response.is_failed():
+                                logger.face("Challenge-response ÉCHOUÉ — spoof probable")
+                                _edb.log_event("SPOOF_CHALLENGE_FAILED", {})
+                                self._challenge_response.reset()
                     else:
-                        # Owner perdu → reset état blink
+                        # Owner perdu → reset état blink et challenge
                         self._anti_spoof.reset()
+                        self._challenge_response.reset()
                         self.after(0, lambda: self.spoof_lbl.configure(text=""))
                 else:
                     self.after(0, lambda: self.spoof_lbl.configure(text=""))
@@ -1259,6 +1339,14 @@ class PrankGuardApp(ctk.CTk):
 
             # Dessiner les rectangles (résultats en cache) et afficher
             frame = self.face_analyzer.draw_on_frame(frame)
+            # Vague 5 — overlay challenge-response
+            if self._challenge_response.is_active():
+                instruction = self._challenge_response.get_instruction()
+                cv2.putText(
+                    frame, instruction,
+                    (10, frame.shape[0] - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2, cv2.LINE_AA,
+                )
             self._display_frame(frame)
 
             time.sleep(0.03)
@@ -1635,5 +1723,67 @@ class PrankGuardApp(ctk.CTk):
             pass
         self.usb_watcher.stop()
         self.poll_watcher.stop()
+        self._ssid_monitor.stop()
+        self._watchdog.stop()
         self.locker.do_unlock()
         self.destroy()
+
+    # ── Vague 5 — méthodes ───────────────────────────────────────────
+
+    def _on_challenge_response_toggle(self):
+        """Active/désactive le challenge-response anti-spoof."""
+        enabled = self._challenge_response_var.get()
+        self.config.update(challenge_response_enabled=enabled)
+        if not enabled:
+            self._challenge_response.reset()
+        logger.toggle(f"Challenge-response {'ACTIVÉ' if enabled else 'DÉSACTIVÉ'}")
+
+    def _on_watch_ssid_toggle(self):
+        """Active/désactive la surveillance SSID WiFi."""
+        enabled = self._watch_ssid_var.get()
+        self.config.update(watch_ssid=enabled)
+        if enabled and not self._ssid_monitor._running:
+            self._ssid_monitor.start(self, self._on_ssid_change)
+        elif not enabled:
+            self._ssid_monitor.stop()
+        logger.toggle(f"Surveillance SSID {'ACTIVÉE' if enabled else 'DÉSACTIVÉE'}")
+
+    def _on_ssid_change(self, old_ssid, new_ssid):
+        """Callback changement de SSID — locker si mode SECURE."""
+        logger.info(f"SSID changé : {old_ssid!r} → {new_ssid!r}")
+        _edb.log_event("SSID_CHANGED", {"old": old_ssid, "new": new_ssid})
+        if self.config.sec_mode == "SECURE" and self.locker.can_lock():
+            self.locker.do_lock("Changement de réseau WiFi")
+            _edb.log_event("LOCK_TRIGGERED", {"reason": "SSID_CHANGED"})
+            self.after(0, self._update_usb_label)
+
+    def _update_stats_section(self):
+        """Rafraîchit les compteurs analytics dans l'onglet Logs (toutes les 10s)."""
+        if self._closing:
+            return
+        try:
+            stats = _edb.get_stats()
+            mapping = {
+                "Locks":        stats.get("LOCK_TRIGGERED", 0),
+                "Face_Owner":   stats.get("FACE_OWNER", 0),
+                "Face_Unknown": stats.get("FACE_UNKNOWN", 0),
+                "Alarms":       stats.get("ALARM_START", 0),
+                "USB":          stats.get("USB_CONNECTED", 0),
+            }
+            for key, val in mapping.items():
+                lbl = self._stats_labels.get(key)
+                if lbl:
+                    lbl.configure(text=str(val))
+        except Exception:
+            pass
+        self.after(10000, self._update_stats_section)
+
+    def _export_csv(self):
+        """Exporte les 30 derniers jours d'événements en CSV dans APP_DATA/exports/."""
+        try:
+            ts = datetime.now().strftime("%Y-%m-%d")
+            out_path = str(paths.EXPORTS_DIR / f"events_{ts}.csv")
+            n = _edb.export_csv(out_path, days=30)
+            logger.info(f"Export CSV : {n} événements → {out_path}")
+        except Exception as exc:
+            logger.error(f"Export CSV: erreur — {exc}")

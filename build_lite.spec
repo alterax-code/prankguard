@@ -79,6 +79,9 @@ a = Analysis(
         'src.hardware_benchmark',
         # Vague 4
         'src.device_inventory',
+        # Vague 5
+        'src.challenge_response',
+        'src.network_monitor',
     ],
     hookspath=[],
     hooksconfig={},
