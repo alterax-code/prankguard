@@ -335,8 +335,8 @@ class PrankGuardApp(ctk.CTk):
         # threading.Thread(target=self._keyboard_listener, daemon=True).start()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
-        # Anti-capture d'écran (Vague 2)
-        self.after(100, self._apply_capture_protection)
+        # Anti-capture d'écran désactivé — bloque le partage d'écran
+        # self.after(100, self._apply_capture_protection)
         # Forcer changement de mot de passe si nécessaire (Vague 2)
         self.after(200, self._check_force_password_change)
         # Vague 4 — démarrer le dashboard
@@ -809,8 +809,8 @@ class PrankGuardApp(ctk.CTk):
         self.mode_lbl.configure(text=f"{self.config.usb_mode} | {v}")
         logger.mode(f"Mode sécurité → {v}")
         _edb.log_event("MODE_CHANGED", {"mode": "SECURITY", "value": v})
-        # Réappliquer la protection anti-capture après changement de mode (Vague 2)
-        self.after(50, self._apply_capture_protection)
+        # Réappliquer la protection anti-capture après changement de mode (désactivé)
+        # self.after(50, self._apply_capture_protection)
 
     def _apply_capture_protection(self):
         """Applique la protection anti-capture d'écran (WDA_EXCLUDEFROMCAPTURE)."""
