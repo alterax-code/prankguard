@@ -102,6 +102,68 @@ def get_stats() -> dict:
         return {}
 
 
+def export_csv(path: str) -> int:
+    """Exporte tous les événements en CSV. Retourne le nb de lignes écrites."""
+    import csv
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT ts, type, details FROM events ORDER BY ts DESC"
+            ).fetchall()
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "type", "details"])
+            for r in rows:
+                writer.writerow([r[0], r[1], r[2]])
+        return len(rows)
+    except Exception:
+        return 0
+
+
+def get_hourly_distribution(event_type: str = None) -> dict:
+    """Retourne {heure: count} pour les dernières 24h."""
+    import math
+    since = time.time() - 86400
+    try:
+        clauses = ["ts >= ?"]
+        params: list = [since]
+        if event_type:
+            clauses.append("type = ?")
+            params.append(event_type)
+        where = "WHERE " + " AND ".join(clauses)
+        with _connect() as conn:
+            rows = conn.execute(
+                f"SELECT ts FROM events {where}", params
+            ).fetchall()
+        dist: dict = {h: 0 for h in range(24)}
+        for (ts,) in rows:
+            hour = int((ts % 86400) / 3600)
+            dist[hour] = dist.get(hour, 0) + 1
+        return dist
+    except Exception:
+        return {}
+
+
+def get_daily_stats(days: int = 7) -> list:
+    """Retourne [{date, counts_by_type}] pour les `days` derniers jours."""
+    import datetime
+    since = time.time() - days * 86400
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT ts, type FROM events WHERE ts >= ? ORDER BY ts",
+                (since,),
+            ).fetchall()
+        daily: dict = {}
+        for ts, etype in rows:
+            day = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            daily.setdefault(day, {})
+            daily[day][etype] = daily[day].get(etype, 0) + 1
+        return [{"date": d, "counts": c} for d, c in sorted(daily.items())]
+    except Exception:
+        return []
+
+
 def cleanup_old_events(days: int = 90) -> int:
     """Supprime les événements de plus de `days` jours. Retourne le nb supprimé."""
     cutoff = time.time() - days * 86400

@@ -26,10 +26,12 @@ LOGS_DIR      = APP_DATA / "logs"
 LOG_FILE      = LOGS_DIR / "prankguard.log"
 INTRUSION_LOG = LOGS_DIR / "intrusion_reports.json"
 SHUTDOWN_FLAG = APP_DATA / "watchdog_shutdown.flag"
+EXPORTS_DIR   = APP_DATA / "exports"
 
 # Créer les sous-répertoires immédiatement
 USERS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def migrate_legacy_data() -> None:

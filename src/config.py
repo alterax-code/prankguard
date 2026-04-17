@@ -57,6 +57,10 @@ class Config:
     password_needs_change: bool = True   # Vague 2 — forcer changement au premier lancement
     intrusion_log_path: str = field(default_factory=lambda: str(_paths.INTRUSION_LOG))
 
+    # Vague 5 — challenge-response anti-spoof + surveillance SSID
+    challenge_response_enabled: bool = False
+    watch_ssid: bool = False
+
     # Mode stealth (Sprint 2 — Feature 2)
     stealth_mode: bool = False
 

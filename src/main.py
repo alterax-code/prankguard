@@ -58,7 +58,6 @@ def main():
     from src.enrollment import check_enrollment, EnrollmentWindow
     from src.gui.app import PrankGuardApp
 
-    import subprocess
     import customtkinter as ctk
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
@@ -82,13 +81,7 @@ def main():
     except Exception:
         pass
 
-    if config.close_protection_enabled:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        subprocess.Popen(
-            [sys.executable, "-m", "src.watchdog", str(os.getpid()), project_root],
-            cwd=project_root,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+    # Watchdog géré par WatchdogThread + start_external_watchdog() dans app.py (Vague 5)
 
     if not check_enrollment(config.encodings_path):
         # Enrollment requis — CTk temp root + CTkToplevel
