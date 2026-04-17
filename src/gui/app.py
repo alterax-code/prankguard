@@ -331,7 +331,8 @@ class PrankGuardApp(ctk.CTk):
 
         # Threads
         threading.Thread(target=self._camera_loop, daemon=True).start()
-        threading.Thread(target=self._keyboard_listener, daemon=True).start()
+        # Raccourcis clavier désactivés — interfèrent avec la saisie normale
+        # threading.Thread(target=self._keyboard_listener, daemon=True).start()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         # Anti-capture d'écran (Vague 2)
@@ -1391,30 +1392,28 @@ class PrankGuardApp(ctk.CTk):
 
         self.after(0, lambda t=text: self.cd_lbl.configure(text=t))
 
-    # ── Keyboard (FIX 3) ─────────────────────────────────────────────
+    # ── Keyboard (FIX 3) — DÉSACTIVÉ ─────────────────────────────────
+    # Raccourcis P/L/U/Q désactivés : interfèrent avec la saisie normale.
+    # Réactiver en décommentant le thread dans __init__ et cette méthode.
 
-    def _keyboard_listener(self):
-        """FIX 3 — En pause, seul P (toggle pause) reste actif."""
-        import keyboard
-
-        while self.running:
-            if keyboard.is_pressed("p"):
-                self.after(0, self._toggle_pause)
-                time.sleep(0.3)
-
-            # FIX 3 — L et U ignorés quand paused
-            if not self.paused:
-                if keyboard.is_pressed("l"):
-                    self.after(0, lambda: self.locker.do_lock("Manuel (clavier)"))
-                    time.sleep(0.5)
-                if keyboard.is_pressed("u"):
-                    self.after(0, self._unblock_action)
-                    time.sleep(0.3)
-                if keyboard.is_pressed("q"):
-                    self.after(0, self._on_close_request)
-                    time.sleep(0.5)
-
-            time.sleep(0.05)
+    # def _keyboard_listener(self):
+    #     """FIX 3 — En pause, seul P (toggle pause) reste actif."""
+    #     import keyboard
+    #     while self.running:
+    #         if keyboard.is_pressed("p"):
+    #             self.after(0, self._toggle_pause)
+    #             time.sleep(0.3)
+    #         if not self.paused:
+    #             if keyboard.is_pressed("l"):
+    #                 self.after(0, lambda: self.locker.do_lock("Manuel (clavier)"))
+    #                 time.sleep(0.5)
+    #             if keyboard.is_pressed("u"):
+    #                 self.after(0, self._unblock_action)
+    #                 time.sleep(0.3)
+    #             if keyboard.is_pressed("q"):
+    #                 self.after(0, self._on_close_request)
+    #                 time.sleep(0.5)
+    #         time.sleep(0.05)
 
     # ── Actions ───────────────────────────────────────────────────────
 
