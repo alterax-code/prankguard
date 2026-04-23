@@ -12,6 +12,7 @@ import numpy as np
 import os
 import time
 import threading
+import logging
 import winsound
 
 import customtkinter as ctk
@@ -48,6 +49,33 @@ import face_recognition
 from src.challenge_response import ChallengeResponse
 from src.network_monitor import SSIDMonitor
 from src.watchdog import WatchdogThread, start_external_watchdog
+
+# ── Profiling perf (retirer en prod via PERF_ENABLED = False) ────────────────
+PERF_ENABLED = True
+
+
+def _setup_perf_logger() -> logging.Logger:
+    """Logger CSV dédié perf : HH:MM:SS.mmm,stage,duration_us"""
+    log = logging.getLogger("prankguard.perf")
+    if log.handlers:
+        return log
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
+    perf_file = paths.LOGS_DIR / f"perf_{datetime.now().strftime('%Y-%m-%d')}.log"
+    h = logging.FileHandler(str(perf_file), encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d,%(message)s", datefmt="%H:%M:%S"))
+    log.addHandler(h)
+    return log
+
+
+_perf_log = _setup_perf_logger() if PERF_ENABLED else None
+
+
+def _p(stage: str, duration_s: float) -> None:
+    """Log un stage perf si activé (durée en µs)."""
+    if _perf_log is not None:
+        _perf_log.debug(f"{stage},{duration_s * 1_000_000:.0f}")
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class _ForcePasswordChangeDialog(ctk.CTkToplevel):
@@ -238,6 +266,10 @@ class PrankGuardApp(ctk.CTk):
         # Rapport d'intrusion
         self._reporter = IntrusionReporter(config.intrusion_log_path)
         self._intrusion_active: bool = False
+
+        # Analyse asynchrone — évite les saccades vidéo pendant face_recognition
+        self._analysis_in_progress: bool = False     # Flag : worker en cours ?
+        self._capture_counter: int = 0                # Compteur indépendant pour scheduler
 
         # Vague 3 — Motion pre-filter + suivi transitions d'état
         self.motion_detector = MotionDetector()
@@ -1132,12 +1164,25 @@ class PrankGuardApp(ctk.CTk):
     # ── Camera loop (FIX 6) ───────────────────────────────────────────
 
     def _camera_loop(self):
-        """Boucle caméra avec frame skip pour vidéo fluide."""
-        self.cap = cv2.VideoCapture(0)
+        """
+        Boucle caméra asynchrone pour retour vidéo fluide.
+        Le thread principal ne fait QUE capture + affichage à 30 FPS.
+        L'analyse lourde (face_recognition ~100-200ms) tourne dans un worker
+        thread séparé, déclenchée 1 frame sur N. Les détections sont mises
+        en cache dans face_analyzer.last_results et dessinées en overlay
+        sur chaque frame affichée.
+        """
+        # Backend DSHOW = init plus rapide Windows, BUFFERSIZE=1 = pas de lag de frames
+        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+        _last_read_t: float = 0.0
         while self.running and not self._closing:
+            if PERF_ENABLED:
+                _t_loop = time.perf_counter()
             # Afficher les cooldowns dans le footer
             self._update_cooldowns()
 
@@ -1149,7 +1194,15 @@ class PrankGuardApp(ctk.CTk):
                 time.sleep(0.1)
                 continue
 
+            if PERF_ENABLED:
+                _t0 = time.perf_counter()
             ret, frame = self.cap.read()
+            if PERF_ENABLED:
+                _t1 = time.perf_counter()
+                if _last_read_t > 0:
+                    _p("inter_read", _t1 - _last_read_t)
+                _p("cap_read", _t1 - _t0)
+                _last_read_t = _t1
 
             if not ret or frame is None:
                 # Caméra perdue
@@ -1166,7 +1219,8 @@ class PrankGuardApp(ctk.CTk):
                     time.sleep(2)
                     with self._cap_lock:
                         if self.running and not self._closing:
-                            self.cap = cv2.VideoCapture(0)
+                            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 time.sleep(0.1)
                 continue
 
@@ -1183,200 +1237,275 @@ class PrankGuardApp(ctk.CTk):
                 self._fps_counter = 0
                 self._fps_last_time = _fps_now
 
-            # FIX 6 + Vague 3 — Analyse 1 frame sur N avec motion pre-filter
-            if self.face_analyzer.is_next_analysis_frame():
-                self._motion_skip_total += 1
-                if self.motion_detector.should_analyze(frame):
-                    analysis = self.face_analyzer.process_frame(frame)
-                else:
-                    self._motion_skip_skipped += 1
-                    self.face_analyzer.tick()
-                    analysis = None
-            else:
-                analysis = self.face_analyzer.process_frame(frame)
+            # Scheduler d'analyse : 1 frame sur N, jamais deux en parallèle
+            self._capture_counter += 1
+            N = self.face_analyzer.analyze_every_n
+            if (self._capture_counter % N == 0) and not self._analysis_in_progress:
+                self._analysis_in_progress = True
+                # frame.copy() obligatoire : le buffer cap sera écrasé au prochain read()
+                threading.Thread(
+                    target=self._analyze_frame_worker,
+                    args=(frame.copy(),),
+                    daemon=True,
+                ).start()
 
-            if analysis is not None:
-                # Frame d'analyse — mettre à jour la state machine
-                situation = self.face_analyzer.get_situation()
-                result = self.state_machine.update(situation, self.locker.can_lock())
-
-                # Vague 3 — Transitions d'état faciale (events_db)
-                if situation["owner"] and not situation["threat"]:
-                    _new_face = "OWNER"
-                elif situation["threat"]:
-                    _new_face = "UNKNOWN"
-                elif not self.face_analyzer.last_results:
-                    _new_face = "NONE"
-                else:
-                    _new_face = "PASSING"
-                if _new_face != self._last_face_state:
-                    _edb.log_event(f"FACE_{_new_face}", {
-                        "prev": self._last_face_state,
-                        "face_count": situation["face_count"],
-                    })
-                    self._last_face_state = _new_face
-                self.motion_detector.set_owner_safe(_new_face == "OWNER")
-
-                # Afficher info visage
-                self.after(0, lambda i=situation["info"]: self.face_info.configure(text=i))
-
-                # Mettre à jour le statut
-                state = result["state"]
-                color = STATE_COLORS.get(state, "#888")
-                self.after(0, lambda s=state, c=color: self.status_label.configure(
-                    text=s, text_color=c
-                ))
-                self.after(0, lambda t=result["countdown"]: self.countdown_label.configure(text=t))
-                # Mettre à jour la couleur du systray
-                self._systray.update_state(state)
-
-                # Vérifier si on doit locker
-                if result["should_lock"]:
-                    self.locker.do_lock(result["lock_reason"])
-                    _edb.log_event("LOCK_TRIGGERED", {"reason": result["lock_reason"]})
-                    self.after(0, self._update_usb_label)
-                    time.sleep(2)
-                    continue
-
-                # Owner reconnu → débloquer USB
-                if situation["owner"] and self.locker.usb_blocked:
-                    self.locker.do_unlock()
-                    self.locker.set_device_cooldown(5.0)
-                    self.poll_watcher.reset_baselines()
-                    self.after(0, self._update_usb_label)
-
-                # Anti-spoofing : analyser uniquement si activé et owner présent
-                if self._anti_spoof_var.get():
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    owner_faces = [r for r in self.face_analyzer.last_results if r.is_owner]
-                    if owner_faces:
-                        spoof_result = self._anti_spoof.update(rgb, owner_faces[0].location)
-                        if spoof_result["spoof_suspect"]:
-                            spoof_txt = f"SPOOF? EAR:{spoof_result['ear']}"
-                            self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
-                                text=t, text_color="#e74c3c"
-                            ))
-                            logger.face(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
-                            # Vague 5 — challenge-response si activé
-                            if (self._challenge_response_var.get()
-                                    and not self._challenge_response.is_active()):
-                                triggered = self._challenge_response.update_ear(
-                                    spoof_result.get("ear_left", 0.3),
-                                    spoof_result.get("ear_right", 0.3),
-                                )
-                                if triggered:
-                                    self._challenge_response.start_challenge()
-                                    logger.face("Challenge-response démarré")
-                        else:
-                            spoof_txt = f"LIVE blinks:{spoof_result['blink_count']}"
-                            self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
-                                text=t, text_color="#2ecc71"
-                            ))
-
-                        # Vague 5 — valider le challenge si actif
-                        if self._challenge_response.is_active():
-                            lm_list = face_recognition.face_landmarks(
-                                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-                                [owner_faces[0].location]
-                            )
-                            if lm_list:
-                                passed = self._challenge_response.validate_pose(lm_list[0])
-                                if passed:
-                                    logger.face("Challenge-response validé — owner confirmé LIVE")
-                                    self._anti_spoof.reset()
-                            if self._challenge_response.is_failed():
-                                logger.face("Challenge-response ÉCHOUÉ — spoof probable")
-                                _edb.log_event("SPOOF_CHALLENGE_FAILED", {})
-                                self._challenge_response.reset()
-                    else:
-                        # Owner perdu → reset état blink et challenge
-                        self._anti_spoof.reset()
-                        self._challenge_response.reset()
-                        self.after(0, lambda: self.spoof_lbl.configure(text=""))
-                else:
-                    self.after(0, lambda: self.spoof_lbl.configure(text=""))
-
-                # Alarme sonore : SECURE + activée + THREAT depuis >3s
-                if result["state"] == "THREAT":
-                    if self._threat_start is None:
-                        self._threat_start = time.time()
-                    elapsed = time.time() - self._threat_start
-                    if (self._alarm_var.get()
-                            and self.config.sec_mode == "SECURE"
-                            and not self._alarm_active
-                            and elapsed >= 3.0):
-                        self._start_alarm()
-                else:
-                    self._threat_start = None
-                    if self._alarm_active:
-                        self._stop_alarm()
-
-                # Rapport d'intrusion
-                intrusion_states = (State.THREAT, State.SURFER)
-                if result["state"] in intrusion_states:
-                    itype = (IntrusionType.UNKNOWN_FACE if result["state"] == State.THREAT
-                             else IntrusionType.SHOULDER_SURF)
-                    if not self._intrusion_active:
-                        self._reporter.start_intrusion(itype)
-                        self._intrusion_active = True
-                    else:
-                        # Mise à jour distance + spoof
-                        threats = [r for r in self.face_analyzer.last_results if not r.is_owner]
-                        dist = min((r.distance for r in threats), default=None)
-                        spoof = (self._anti_spoof_var.get()
-                                 and self._anti_spoof.spoof_suspect)
-                        if result["should_lock"]:
-                            self._reporter.update_current(
-                                face_distance=dist, spoof=spoof, action="LOCK"
-                            )
-                        else:
-                            self._reporter.update_current(face_distance=dist, spoof=spoof)
-                else:
-                    if self._intrusion_active:
-                        self._intrusion_active = False
-                        event = self._reporter.end_intrusion()
-                        if event:
-                            self.after(0, lambda e=event: self._log_intrusion_event(e))
-
-            # Dessiner les rectangles (résultats en cache) et afficher
+            # Affichage FLUIDE : overlay = dernières détections en cache
+            # face_analyzer.draw_on_frame() lit self._last_results (mis à jour par le worker)
+            if PERF_ENABLED:
+                _t0 = time.perf_counter()
             frame = self.face_analyzer.draw_on_frame(frame)
+            if PERF_ENABLED:
+                _p("draw_on_frame", time.perf_counter() - _t0)
             # Vague 5 — overlay challenge-response
             if self._challenge_response.is_active():
+                if PERF_ENABLED:
+                    _t0 = time.perf_counter()
                 instruction = self._challenge_response.get_instruction()
                 cv2.putText(
                     frame, instruction,
                     (10, frame.shape[0] - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2, cv2.LINE_AA,
                 )
+                if PERF_ENABLED:
+                    _p("challenge_overlay", time.perf_counter() - _t0)
+            if PERF_ENABLED:
+                _t0 = time.perf_counter()
             self._display_frame(frame)
-
-            time.sleep(0.03)
+            if PERF_ENABLED:
+                _p("display_total", time.perf_counter() - _t0)
+                _p("loop_total", time.perf_counter() - _t_loop)
+            # Pas de time.sleep : cap.read() bloque déjà au rythme du FPS caméra
 
         with self._cap_lock:
             if self.cap:
                 self.cap.release()
                 self.cap = None
 
+    def _analyze_frame_worker(self, frame):
+        """
+        Worker thread : analyse faciale lourde + state machine + logique sécu.
+        Mis à jour atomiquement : face_analyzer._last_results (lu par draw_on_frame).
+        Cette méthode contient l'intégralité de la logique qui tournait
+        auparavant dans _camera_loop, inchangée.
+        """
+        if PERF_ENABLED:
+            _t_worker = time.perf_counter()
+            _last_wt = getattr(self, '_last_worker_entry_t', 0.0)
+            if _last_wt > 0:
+                _p("worker_interval", _t_worker - _last_wt)
+            self._last_worker_entry_t = _t_worker
+        try:
+            # Motion pre-filter (Vague 3) — skip si scène statique et owner safe
+            self._motion_skip_total += 1
+            if self.motion_detector.should_analyze(frame):
+                # Forcer face_analyzer à analyser cette frame : aligner son compteur
+                # interne pour que process_frame() dépasse le seuil modulo N.
+                fa = self.face_analyzer
+                fa._frame_count = fa.analyze_every_n - 1
+                if PERF_ENABLED:
+                    _t0 = time.perf_counter()
+                analysis = fa.process_frame(frame)
+                if PERF_ENABLED:
+                    _p("process_frame_total", time.perf_counter() - _t0)
+            else:
+                self._motion_skip_skipped += 1
+                self.face_analyzer.tick()
+                analysis = None
+
+            if analysis is None:
+                return
+
+            # Frame d'analyse — mettre à jour la state machine
+            situation = self.face_analyzer.get_situation()
+            if PERF_ENABLED:
+                _t0 = time.perf_counter()
+            result = self.state_machine.update(situation, self.locker.can_lock())
+            if PERF_ENABLED:
+                _p("state_machine", time.perf_counter() - _t0)
+
+            # Vague 3 — Transitions d'état faciale (events_db)
+            if situation["owner"] and not situation["threat"]:
+                _new_face = "OWNER"
+            elif situation["threat"]:
+                _new_face = "UNKNOWN"
+            elif not self.face_analyzer.last_results:
+                _new_face = "NONE"
+            else:
+                _new_face = "PASSING"
+            if _new_face != self._last_face_state:
+                _edb.log_event(f"FACE_{_new_face}", {
+                    "prev": self._last_face_state,
+                    "face_count": situation["face_count"],
+                })
+                self._last_face_state = _new_face
+            self.motion_detector.set_owner_safe(_new_face == "OWNER")
+
+            # Afficher info visage
+            self.after(0, lambda i=situation["info"]: self.face_info.configure(text=i))
+
+            # Mettre à jour le statut
+            state = result["state"]
+            color = STATE_COLORS.get(state, "#888")
+            self.after(0, lambda s=state, c=color: self.status_label.configure(
+                text=s, text_color=c
+            ))
+            self.after(0, lambda t=result["countdown"]: self.countdown_label.configure(text=t))
+            # Mettre à jour la couleur du systray
+            self._systray.update_state(state)
+
+            # Vérifier si on doit locker
+            if result["should_lock"]:
+                self.locker.do_lock(result["lock_reason"])
+                _edb.log_event("LOCK_TRIGGERED", {"reason": result["lock_reason"]})
+                self.after(0, self._update_usb_label)
+                time.sleep(2)
+                return
+
+            # Owner reconnu → débloquer USB
+            if situation["owner"] and self.locker.usb_blocked:
+                self.locker.do_unlock()
+                self.locker.set_device_cooldown(5.0)
+                self.poll_watcher.reset_baselines()
+                self.after(0, self._update_usb_label)
+
+            # Anti-spoofing : analyser uniquement si activé et owner présent
+            if self._anti_spoof_var.get():
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                owner_faces = [r for r in self.face_analyzer.last_results if r.is_owner]
+                if owner_faces:
+                    spoof_result = self._anti_spoof.update(rgb, owner_faces[0].location)
+                    if spoof_result["spoof_suspect"]:
+                        spoof_txt = f"SPOOF? EAR:{spoof_result['ear']}"
+                        self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
+                            text=t, text_color="#e74c3c"
+                        ))
+                        logger.face(f"Anti-spoof: suspect (EAR={spoof_result['ear']}, blinks={spoof_result['blink_count']})")
+                        # Vague 5 — challenge-response si activé
+                        if (self._challenge_response_var.get()
+                                and not self._challenge_response.is_active()):
+                            triggered = self._challenge_response.update_ear(
+                                spoof_result.get("ear_left", 0.3),
+                                spoof_result.get("ear_right", 0.3),
+                            )
+                            if triggered:
+                                self._challenge_response.start_challenge()
+                                logger.face("Challenge-response démarré")
+                    else:
+                        spoof_txt = f"LIVE blinks:{spoof_result['blink_count']}"
+                        self.after(0, lambda t=spoof_txt: self.spoof_lbl.configure(
+                            text=t, text_color="#2ecc71"
+                        ))
+
+                    # Vague 5 — valider le challenge si actif
+                    if self._challenge_response.is_active():
+                        lm_list = face_recognition.face_landmarks(
+                            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                            [owner_faces[0].location]
+                        )
+                        if lm_list:
+                            passed = self._challenge_response.validate_pose(lm_list[0])
+                            if passed:
+                                logger.face("Challenge-response validé — owner confirmé LIVE")
+                                self._anti_spoof.reset()
+                        if self._challenge_response.is_failed():
+                            logger.face("Challenge-response ÉCHOUÉ — spoof probable")
+                            _edb.log_event("SPOOF_CHALLENGE_FAILED", {})
+                            self._challenge_response.reset()
+                else:
+                    # Owner perdu → reset état blink et challenge
+                    self._anti_spoof.reset()
+                    self._challenge_response.reset()
+                    self.after(0, lambda: self.spoof_lbl.configure(text=""))
+            else:
+                self.after(0, lambda: self.spoof_lbl.configure(text=""))
+
+            # Alarme sonore : SECURE + activée + THREAT depuis >3s
+            if result["state"] == "THREAT":
+                if self._threat_start is None:
+                    self._threat_start = time.time()
+                elapsed = time.time() - self._threat_start
+                if (self._alarm_var.get()
+                        and self.config.sec_mode == "SECURE"
+                        and not self._alarm_active
+                        and elapsed >= 3.0):
+                    self._start_alarm()
+            else:
+                self._threat_start = None
+                if self._alarm_active:
+                    self._stop_alarm()
+
+            # Rapport d'intrusion
+            intrusion_states = (State.THREAT, State.SURFER)
+            if result["state"] in intrusion_states:
+                itype = (IntrusionType.UNKNOWN_FACE if result["state"] == State.THREAT
+                         else IntrusionType.SHOULDER_SURF)
+                if not self._intrusion_active:
+                    self._reporter.start_intrusion(itype)
+                    self._intrusion_active = True
+                else:
+                    # Mise à jour distance + spoof
+                    threats = [r for r in self.face_analyzer.last_results if not r.is_owner]
+                    dist = min((r.distance for r in threats), default=None)
+                    spoof = (self._anti_spoof_var.get()
+                             and self._anti_spoof.spoof_suspect)
+                    if result["should_lock"]:
+                        self._reporter.update_current(
+                            face_distance=dist, spoof=spoof, action="LOCK"
+                        )
+                    else:
+                        self._reporter.update_current(face_distance=dist, spoof=spoof)
+            else:
+                if self._intrusion_active:
+                    self._intrusion_active = False
+                    event = self._reporter.end_intrusion()
+                    if event:
+                        self.after(0, lambda e=event: self._log_intrusion_event(e))
+        finally:
+            if PERF_ENABLED:
+                _p("worker_total", time.perf_counter() - _t_worker)
+            self._analysis_in_progress = False
+
     def _display_frame(self, frame):
         """Affiche un frame dans la GUI (FIX 6 — tous les frames)."""
+        if PERF_ENABLED:
+            _t_fn = time.perf_counter()
+            _t0 = _t_fn
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        if PERF_ENABLED:
+            _p("cvt_color+from_array", time.perf_counter() - _t0)
 
         # FIX 9 — Redimensionner proportionnellement au conteneur
         try:
+            if PERF_ENABLED:
+                _t0 = time.perf_counter()
             container_w = self.cam_label.winfo_width()
             container_h = self.cam_label.winfo_height()
+            if PERF_ENABLED:
+                _p("winfo", time.perf_counter() - _t0)
             if container_w > 1 and container_h > 1:
                 # Garder le ratio 4:3
                 ratio = min(container_w / 640, container_h / 480)
                 new_w = int(640 * ratio)
                 new_h = int(480 * ratio)
+                if PERF_ENABLED:
+                    _t0 = time.perf_counter()
                 img = img.resize((new_w, new_h))
+                if PERF_ENABLED:
+                    _p("pil_resize", time.perf_counter() - _t0)
         except Exception:
             img = img.resize((640, 480))
 
         # FIX 3 — CTkImage évite le warning PIL.ImageTk.PhotoImage
+        if PERF_ENABLED:
+            _t0 = time.perf_counter()
         ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+        if PERF_ENABLED:
+            _p("ctk_image", time.perf_counter() - _t0)
+            _t0 = time.perf_counter()
         self.after(0, lambda i=ctk_img: self.cam_label.configure(image=i, text=""))
+        if PERF_ENABLED:
+            _p("after_enqueue", time.perf_counter() - _t0)
+            _p("display_fn_total", time.perf_counter() - _t_fn)
 
     def _update_cooldowns(self):
         """Met à jour l'affichage des cooldowns dans le footer."""

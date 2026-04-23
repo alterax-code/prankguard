@@ -115,6 +115,9 @@ class FaceAnalyzer:
         Traite un frame. Retourne les résultats si c'est un frame d'analyse,
         None sinon (utiliser last_results pour l'affichage).
         """
+        import time as _time
+        _perf = logging.getLogger("prankguard.perf")
+
         self._frame_count += 1
 
         if self._frame_count % self.analyze_every_n != 0:
@@ -125,20 +128,29 @@ class FaceAnalyzer:
 
         # Downscale pour la détection (plus rapide), encode sur frame full-res
         s = self.detection_scale
+        _t0 = _time.perf_counter()
         if self._use_yunet:
             small_bgr = cv2.resize(frame, (0, 0), fx=s, fy=s)
             locs = self._detect_faces_yunet(small_bgr, s, h, w)
+            _backend = "yunet"
         else:
             small_rgb = cv2.resize(rgb, (0, 0), fx=s, fy=s)
             locs_small = face_recognition.face_locations(small_rgb)
             locs = [(int(t / s), int(r / s), int(b / s), int(l / s))
                     for t, r, b, l in locs_small]
+            _backend = "hog"
+        if _perf.handlers:
+            _perf.debug(f"fa_detect_{_backend},{(_time.perf_counter() - _t0) * 1_000_000:.0f}")
         results = []
 
         if locs:
+            _t0 = _time.perf_counter()
             encs = face_recognition.face_encodings(
                 rgb, known_face_locations=locs, num_jitters=1, model="large"
             )
+            if _perf.handlers:
+                _perf.debug(f"fa_encode_large,{(_time.perf_counter() - _t0) * 1_000_000:.0f}")
+            _t0 = _time.perf_counter()
             for loc, enc in zip(locs, encs):
                 t, r, b, l = loc
                 if self._user_encodings:
@@ -164,6 +176,8 @@ class FaceAnalyzer:
                     is_looking=looking,
                     name=matched_name,
                 ))
+            if _perf.handlers:
+                _perf.debug(f"fa_match,{(_time.perf_counter() - _t0) * 1_000_000:.0f}")
 
         self._last_results = results
         return results

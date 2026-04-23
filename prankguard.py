@@ -345,6 +345,12 @@ class PrankGuardApp(ctk.CTk):
         self.cap = None
         self.build_ui()
         
+        # État partagé entre thread capture et thread analyse
+        self._last_detections = []    # Liste de (loc, label, color, distance) pour overlay
+        self._last_info = "--"
+        self._analyzing = False        # Flag : analyse en cours ?
+        self._frame_counter = 0
+        self.ANALYSIS_INTERVAL = 3     # Analyser 1 frame sur 3 (~10 Hz à 30fps)
         self.usb_watcher = DeviceWatcher(self.on_device_arrival, self.log)
         self.usb_watcher.start()
         
