@@ -546,7 +546,7 @@ const SCHEMA = [
     { k: "min_face_size", type: "range", min: .05, max: .3, step: .01, label: "Portée de détection", desc: "Taille minimale d'un visage pour estimer qu'il lit l'écran.", ends: ["Loin", "Proche"], fmt: v => Math.round(v * 100) + "%" },
     { k: "max_yaw", type: "range", min: .2, max: .9, step: .05, label: "Angle de regard toléré", desc: "Au-delà, une personne de profil n'est pas considérée comme lisant l'écran.", ends: ["Strict", "Large"], fmt: deg },
     { k: "adaptive_learning", type: "toggle", label: "Apprentissage continu", desc: "Ajoute à votre profil les vues nettes et certaines de vous (lumière, lunettes, angle) pour vous reconnaître de mieux en mieux." },
-    { k: "anti_spoof", type: "toggle", label: "Ignorer photos et écrans", desc: "Anti-spoofing : un poster ou une photo ne déclenche rien et ne vous imite pas." },
+    { k: "anti_spoof", type: "toggle", label: "Ignorer photos et écrans", desc: "Analyse de texture (MiniFASNet), trame d'écran (moiré) et relief 3D de la tête : un poster, une photo ou un téléphone ne déclenche rien et ne vous imite pas." },
   ]},
   { title: "Périphériques", icon: "i-plug", rows: [
     { k: "device_action", type: "seg", label: "Branchement d'un périphérique", desc: "« Demander » : fenêtre d'autorisation si vous êtes là, clavier bloqué en attendant. Refus, silence ou absence : verrouillage.", options: [["off", "Ignorer"], ["notify", "Notifier"], ["ask", "Demander"], ["lock", "Verrouiller"]] },

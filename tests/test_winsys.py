@@ -127,11 +127,17 @@ def test_session_lock_state_comes_from_wts(monkeypatch, flags, locked):
     assert winsys.is_session_locked() is locked
 
 
+unlocked_session = pytest.mark.skipif(winsys._wts_session_flags() == 0,
+                                      reason="session Windows verrouillée pendant les tests")
+
+
+@unlocked_session
 def test_session_lock_state_falls_back_when_wts_unknown(monkeypatch):
     monkeypatch.setattr(winsys, "_wts_session_flags", lambda: None)
     assert winsys.is_session_locked() is False      # session de test interactive, déverrouillée
 
 
+@unlocked_session
 def test_wts_session_flags_reads_current_session():
     assert winsys._wts_session_flags() == 1         # les tests tournent dans une session ouverte
 

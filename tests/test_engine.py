@@ -312,6 +312,11 @@ def test_does_not_learn_doubtful_liveness(eng, learner):
     assert not eng._maybe_learn(learner, _unit((0, .8), (5, .6)), 1000.0)
 
 
+def test_does_not_learn_from_a_screen(eng, learner):
+    learner.moire = 0.3
+    assert not eng._maybe_learn(learner, _unit((0, .6), (5, .8)), 1000.0)
+
+
 def test_learning_can_be_disabled(eng, learner, monkeypatch):
     eng.config.update({"adaptive_learning": False})
     frame = np.zeros((480, 640, 3), np.uint8)

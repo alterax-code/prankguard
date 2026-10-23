@@ -309,3 +309,131 @@ def test_profile_matcher_never_mixes_embedding_spaces():
     assert (name, model) == ("alice", "sface")
     assert pm.best({"autre": s128[0]}) == (None, 0.0, None)
     assert ProfileMatcher().empty
+
+
+# ── Indices anti-spoof : trame d'écran (moiré) et relief 3D (parallaxe du nez) ──
+
+from prankguard.vision import faces as F  # noqa: E402
+
+
+def _skin(seed=0, size=200):
+    """Texture « peau » : bruit lissé, aucune périodicité."""
+    rng = np.random.default_rng(seed)
+    import cv2
+    g = cv2.GaussianBlur(rng.normal(128, 40, (size, size)).astype(np.float32), (0, 0), 3.0)
+    return np.clip(np.dstack([g, g * 0.9, g * 0.8]), 0, 255).astype(np.uint8)
+
+
+def _screen(img, period=3.1, amp=40.0):
+    """Même image refilmée sur un écran : trame périodique fine (grille de pixels / sous-pixels)."""
+    h, w = img.shape[:2]
+    x = np.arange(w, dtype=np.float32)
+    grating = amp * np.sin(2 * np.pi * x / period)[None, :, None]
+    return np.clip(img.astype(np.float32) + grating, 0, 255).astype(np.uint8)
+
+
+BOX = np.array([20, 10, 160, 180], np.float32)
+
+
+def test_moire_is_low_on_natural_texture_and_high_on_a_screen_grid():
+    for seed in range(5):
+        skin = _skin(seed)
+        assert F.moire_ratio(skin, BOX) < F.MOIRE_FROM
+        assert F.moire_level(F.moire_ratio(skin, BOX)) == 0.0
+        assert F.moire_level(F.moire_ratio(_screen(skin), BOX)) == 1.0
+
+
+def test_moire_ignores_tiny_faces_and_ramps_linearly():
+    assert F.moire_ratio(_skin(), np.array([0, 0, 20, 20], np.float32)) is None
+    assert F.moire_level(None) == 0.0
+    mid = (F.MOIRE_FROM + F.MOIRE_TO) / 2
+    assert F.moire_level(mid) == pytest.approx(0.5)
+
+
+def _homography(lm, H):
+    p = np.c_[lm, np.ones(len(lm))] @ H.T
+    return (p[:, :2] / p[:, 2:]).astype(np.float32)
+
+
+def test_parallax_is_zero_for_a_moved_photo():
+    H = np.array([[1.08, 0.06, 12.0], [-0.04, 0.97, -7.0], [0.0004, -0.0003, 1.0]])
+    a = landmarks()
+    assert F.nose_parallax(a, _homography(a, H)) < 0.01
+
+
+def test_parallax_is_large_when_a_real_head_turns():
+    turned = landmarks(nose=(68.0, 60.0))            # le nez (hors plan) se décale plus que les yeux / la bouche
+    assert F.nose_parallax(landmarks(), turned) > F.PARALLAX_3D
+
+
+def test_parallax_survives_degenerate_points():
+    flat = np.zeros((5, 2), np.float32)
+    assert F.nose_parallax(flat, flat) == 0.0
+
+
+def test_combine_liveness():
+    assert F.combine_liveness(0.9, 0.0, False) == pytest.approx(0.9)
+    assert F.combine_liveness(0.9, 1.0, False) < 0.3            # trame d'écran franche
+    assert F.combine_liveness(0.1, 0.0, True) == F.DEPTH_FLOOR   # relief 3D : jamais « photo »
+    assert F.combine_liveness(0.1, 1.0, True) < 0.1             # ... sauf sur un écran (vidéo d'une tête qui tourne)
+
+
+def _track_with(lms, dt=0.2):
+    t = new_track()
+    t.lm_hist.clear()
+    for i, lm in enumerate(lms):
+        t.lm_hist.append((i * dt, lm))
+    return t
+
+
+def test_depth_evidence_needs_two_out_of_plane_views():
+    base = landmarks()
+    turn = landmarks(nose=(68.0, 60.0))
+    assert not _track_with([base, base, base]).depth_evidence()
+    assert not _track_with([base, turn]).depth_evidence()                 # trop peu d'images
+    assert _track_with([base, base, turn]).depth_evidence()
+    assert not _track_with([base, turn, base]).depth_evidence()           # une seule image aberrante
+
+
+def test_depth_evidence_ignores_old_views():
+    base, turn = landmarks(), landmarks(nose=(68.0, 60.0))
+    assert not _track_with([base, base, turn], dt=F.DEPTH_WINDOW).depth_evidence()
+
+
+def test_depth_evidence_false_for_a_photo_waved_around():
+    a = landmarks()
+    moves = [_homography(a, np.array([[1 + .03 * i, .02 * i, 5.0 * i], [-.01 * i, 1, -3.0 * i], [.0002 * i, 0, 1]]))
+             for i in range(8)]
+    assert not _track_with(moves).depth_evidence()
+
+
+def test_screen_replay_becomes_spoof_even_if_the_model_is_fooled():
+    t = new_track()
+    for _ in range(4):
+        t.observe_cues(0.9, F.MOIRE_TO + 20)
+    assert t.moire == 1.0 and t.is_spoof
+    t.observe_similarity("alice", 0.95, THR, 1.0)
+    assert (t.status, t.name) == ("spoof", None)
+
+
+def test_single_moire_outlier_is_ignored():
+    t = new_track()
+    t.observe_cues(0.9, 20.0)
+    t.observe_cues(0.9, F.MOIRE_TO + 50)                # reflet isolé
+    t.observe_cues(0.9, 25.0)
+    assert t.moire == 0.0 and not t.is_spoof
+
+
+def test_real_head_movement_protects_against_a_false_photo_verdict():
+    t = new_track()
+    t.lm_hist.extend([(0.0, landmarks()), (0.2, landmarks()), (0.4, landmarks(nose=(68.0, 60.0)))])
+    for _ in range(4):
+        t.observe_cues(0.05, 30.0)                      # contre-jour : MiniFASNet se trompe
+    assert t.depth and not t.is_spoof
+
+
+def test_tracker_records_landmark_history():
+    tr = Tracker()
+    tr.update([make_face(0, 0)], 1.0)
+    tr.update([make_face(2, 1)], 1.1)
+    assert len(tr.tracks[0].lm_hist) == 2 and tr.tracks[0].lm_hist[-1][0] == 1.1

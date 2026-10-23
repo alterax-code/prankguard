@@ -13,7 +13,7 @@ l'écran, la session se verrouille aussitôt. Tout tourne en local, sans compte,
 | **Périphériques** | Clé USB, clavier, souris, écran, réseau, imprimante… branché devant l'écran → fenêtre « autoriser cette fois / toujours / refuser » avec clavier bloqué (anti-BadUSB) ; refus, silence (5 s) ou absence → verrouillage et éjection du périphérique USB |
 | **Caméra masquée / débranchée** | Verrouillage après 6 s |
 | **Absence** (optionnel) | Verrouillage si vous quittez votre poste |
-| **Anti-photo** | Les posters, photos et écrans sont ignorés (anti-spoofing MiniFASNet) |
+| **Anti-photo** | Les posters, photos et écrans sont ignorés : MiniFASNet + détection de trame d'écran (moiré, FFT) + relief 3D de la tête (parallaxe du nez) |
 
 Plus : photo de l'intrus dans le journal, sirène optionnelle, pause temporisée, plusieurs profils
 autorisés, approbation de vos propres périphériques, icône de zone de notification colorée selon l'état,
@@ -94,7 +94,7 @@ Choix techniques mesurés sur la machine de développement :
 ## Développement
 
 ```bat
-.venv\Scripts\python.exe -m pytest -q      &rem 357 tests, ~20 s
+.venv\Scripts\python.exe -m pytest -q      &rem 369 tests, ~15 s
 build.bat                                  &rem tests + exe PyInstaller + installeur Inno Setup
 ```
 

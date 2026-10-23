@@ -317,9 +317,10 @@ class Engine:
                 due.append(t)
         due.sort(key=lambda t: (t.status in ("known", "spoof"), t.last_embed))
         for t in due[:MAX_EMBEDS_PER_FRAME]:
+            was_spoof = t.status == "spoof"
             try:
                 if s.anti_spoof:
-                    t.observe_liveness(self.faces.liveness(frame, t.face))
+                    t.observe_cues(self.faces.liveness(frame, t.face), self.faces.screen_pattern(frame, t.face))
                 if self.matcher.empty:
                     # aucun profil enrôlé : tout visage réel est inconnu
                     t.last_embed = now
@@ -331,6 +332,9 @@ class Engine:
                     if s.adaptive_learning and len(tracks) == 1 and model:
                         self._maybe_learn(t, embs[model], now)
                 embeds += 1
+                if t.status == "spoof" and not was_spoof:
+                    log.info("Visage ignoré (photo / écran) : score réel %.2f, trame d'écran %.2f, relief 3D %s",
+                             t.live, t.moire, "oui" if t.depth else "non")
             except Exception:
                 # une erreur d'un modèle ne doit jamais empêcher la décision de tourner
                 t.last_embed = now
@@ -347,7 +351,7 @@ class Engine:
         s = self.config.s
         if t.status != "known" or not t.name or now - self._last_learn < LEARN_INTERVAL:
             return False
-        if s.anti_spoof and (t.live is None or t.live_n < 3 or t.live < LEARN_MIN_LIVE):
+        if s.anti_spoof and (t.live is None or t.live_n < 3 or t.live < LEARN_MIN_LIVE or t.moire > 0):
             return False
         if not self.faces.embeddable(t.face):
             return False
@@ -675,6 +679,8 @@ class Engine:
                 "status": t.status, "name": t.name,
                 "sim": round(float(t.ema), 3) if t.ema is not None else None,
                 "live": round(float(t.live), 2) if t.live is not None else None,
+                "screen": round(t.moire, 2),
+                "depth": t.depth,
                 "looking": self._is_looking(t), "yaw": round(t.face.yaw, 2), "pitch": round(t.face.pitch, 2),
             })
         now = time.time()

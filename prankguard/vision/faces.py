@@ -143,6 +143,10 @@ class FaceEngine:
         return self._fas.score(frame, face.box)
 
     @staticmethod
+    def screen_pattern(frame: np.ndarray, face: Face) -> float | None:
+        return moire_ratio(frame, face.box)
+
+    @staticmethod
     def embeddable(face: Face) -> bool:
         return face.box[3] >= MIN_EMBED_PX and abs(face.yaw) <= MAX_EMBED_YAW
 
@@ -188,6 +192,74 @@ class Liveness:
             e = np.exp(logits - logits.max())
             probs.append(e / e.sum())
         return float(np.mean(probs, axis=0)[1])
+
+
+# ── Indices anti-spoof complémentaires (sans modèle) ─────────────────────────
+# Calibrés sur le visage réel du propriétaire (webcam : ≤ 39), ~2 000 visages LFW très compressés
+# (≤ 111) et des recaptures d'écran simulées (≥ 126) : la pénalité ne démarre qu'au-delà du pire visage réel.
+MOIRE_N = 64
+MOIRE_FROM, MOIRE_TO = 110.0, 180.0
+MOIRE_PENALTY = 0.7          # moiré franc : la probabilité « réel » est multipliée par 0,3
+MOIRE_CLEAN = 0.2            # en dessous, aucune trame d'écran
+# Parallaxe : un objet plan bougé à la main reste ≤ 0,31 ; une vraie tête qui tourne dépasse 0,35.
+PARALLAX_3D = 0.35
+DEPTH_WINDOW = 3.0           # s
+DEPTH_FLOOR = 0.6            # relief 3D prouvé et pas d'écran : jamais classé « photo »
+
+_HANN = np.outer(np.hanning(MOIRE_N), np.hanning(MOIRE_N))
+_yy, _xx = np.mgrid[:MOIRE_N, :MOIRE_N] - MOIRE_N // 2
+_r = np.hypot(_yy, _xx) / (MOIRE_N / 2)
+_BAND = (_r > 0.25) & (_r < 0.95)
+
+
+def moire_ratio(frame: np.ndarray, box: np.ndarray) -> float | None:
+    """Pic spectral isolé (trame d'écran refilmé) / niveau médian, sur le centre du visage (yeux-nez)."""
+    H, W = frame.shape[:2]
+    x, y, w, h = (float(v) for v in box)
+    side = 0.6 * w
+    cx, cy = x + w / 2, y + 0.45 * h
+    x1, y1 = int(max(0, cx - side / 2)), int(max(0, cy - side / 2))
+    x2, y2 = int(min(W, cx + side / 2)), int(min(H, cy + side / 2))
+    if min(x2 - x1, y2 - y1) < 24:
+        return None
+    g = frame[y1:y2, x1:x2]
+    g = (cv2.cvtColor(g, cv2.COLOR_BGR2GRAY) if g.ndim == 3 else g).astype(np.float32)
+    interp = cv2.INTER_AREA if g.shape[0] > MOIRE_N else cv2.INTER_LINEAR
+    g = cv2.resize(g, (MOIRE_N, MOIRE_N), interpolation=interp)
+    g = g - cv2.GaussianBlur(g, (0, 0), 2.0)        # passe-haut : la peau lisse disparaît, la trame reste
+    v = np.abs(np.fft.fft2(g * _HANN))
+    v = np.fft.fftshift(v)[_BAND]
+    return float(v.max() / (np.median(v) + 1e-6))
+
+
+def moire_level(ratio: float | None) -> float:
+    if ratio is None:
+        return 0.0
+    return float(np.clip((ratio - MOIRE_FROM) / (MOIRE_TO - MOIRE_FROM), 0.0, 1.0))
+
+
+def nose_parallax(a: np.ndarray, b: np.ndarray) -> float:
+    """Écart du nez à l'homographie des 4 points quasi coplanaires (yeux, coins de bouche), en distance
+    inter-oculaire. Nul pour une photo ou un écran (tout est dans un plan), grand quand une vraie tête tourne."""
+    src = a[[0, 1, 3, 4]].astype(np.float32)
+    dst = b[[0, 1, 3, 4]].astype(np.float32)
+    try:
+        Hm = cv2.getPerspectiveTransform(src, dst)
+    except cv2.error:
+        return 0.0
+    p = cv2.perspectiveTransform(a[2][None, None].astype(np.float32), Hm)[0, 0]
+    if not np.all(np.isfinite(p)):
+        return 0.0
+    iod = float(np.linalg.norm(b[1] - b[0]))
+    return float(np.linalg.norm(p - b[2]) / max(iod, 1.0))
+
+
+def combine_liveness(p_fas: float, moire: float, depth: bool) -> float:
+    """MiniFASNet reste la base ; la trame d'écran l'abaisse, le relief 3D (sans trame) la protège."""
+    p = p_fas * (1.0 - MOIRE_PENALTY * moire)
+    if depth and moire < MOIRE_CLEAN:
+        p = max(p, DEPTH_FLOOR)
+    return float(p)
 
 
 def sharpness(img: np.ndarray) -> float:
@@ -292,6 +364,10 @@ class Track:
     live: float | None = None  # EMA de la probabilité "visage réel"
     live_n: int = 0
     ever_known: bool = False
+    lm_hist: deque = field(default_factory=lambda: deque(maxlen=40))   # (t, 5 points) pour la parallaxe
+    moires: deque = field(default_factory=lambda: deque(maxlen=3))
+    moire: float = 0.0        # niveau de trame d'écran (médiane des 3 dernières mesures), 0..1
+    depth: bool = False       # relief 3D observé récemment
 
     UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
     UNKNOWN_MAX = 0.30        # plafond absolu : un seuil « strict » ne transforme jamais le propriétaire en inconnu
@@ -304,6 +380,25 @@ class Track:
     def observe_liveness(self, p_real: float) -> None:
         self.live = p_real if self.live is None else 0.5 * p_real + 0.5 * self.live
         self.live_n += 1
+
+    def depth_evidence(self) -> bool:
+        """Au moins deux images récentes où le nez sort du plan yeux-bouche par rapport à l'image actuelle."""
+        if len(self.lm_hist) < 3:
+            return False
+        t_last, last = self.lm_hist[-1]
+        hits = 0
+        for t, lm in list(self.lm_hist)[:-1]:
+            if t_last - t <= DEPTH_WINDOW and nose_parallax(lm, last) > PARALLAX_3D:
+                hits += 1
+                if hits >= 2:
+                    return True
+        return False
+
+    def observe_cues(self, p_fas: float, ratio: float | None) -> None:
+        self.moires.append(moire_level(ratio))
+        self.moire = float(np.median(self.moires))
+        self.depth = self.depth_evidence()
+        self.observe_liveness(combine_liveness(p_fas, self.moire, self.depth))
 
     @property
     def is_spoof(self) -> bool:
@@ -351,11 +446,14 @@ class Tracker:
             t = self.tracks[i]
             t.face, t.last_seen = faces[j], now
             t.hits += 1
+            t.lm_hist.append((now, faces[j].landmarks))
             used_t.add(i)
             used_f.add(j)
         for j in range(len(faces)):
             if j not in used_f:
-                self.tracks.append(Track(face=faces[j], first_seen=now, last_seen=now))
+                t = Track(face=faces[j], first_seen=now, last_seen=now)
+                t.lm_hist.append((now, faces[j].landmarks))
+                self.tracks.append(t)
         self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_age]
         return [t for t in self.tracks if t.last_seen == now]
 
