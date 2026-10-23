@@ -33,6 +33,7 @@ class Camera:
         self.backend = ""
         self.measured_fps = 0.0
         self.last_error = ""
+        self.opening = False       # ouverture en cours (peut durer > 20 s juste après un déverrouillage)
 
     # ── Contrôle ──
     def start(self) -> None:
@@ -83,6 +84,13 @@ class Camera:
 
     # ── Interne ──
     def _open(self) -> bool:
+        self.opening = True
+        try:
+            return self._try_open()
+        finally:
+            self.opening = False
+
+    def _try_open(self) -> bool:
         # MSMF (HW transforms off) : ~0,4 s d'ouverture contre ~1,3 s pour DSHOW, même cadence
         backends = [(cv2.CAP_MSMF, "MSMF"), (cv2.CAP_DSHOW, "DSHOW")]
         for api, name in backends:

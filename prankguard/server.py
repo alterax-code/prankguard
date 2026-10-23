@@ -186,8 +186,11 @@ def _make_handler(srv: Server):
 
     @post_("/api/profiles/forget-learning")
     def _profiles_forget(h, body):
-        ok = app.gallery.forget_adaptive(str(body.get("name", "")))
+        name = str(body.get("name", ""))
+        ok = app.gallery.forget_adaptive(name)
         app.engine.reload_gallery()
+        if ok:
+            app.events.add("enroll", "info", f"Vues apprises de « {name} » oubliées")
         return {"ok": ok}
 
     @post_("/api/enroll/start")

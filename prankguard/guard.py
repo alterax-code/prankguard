@@ -24,6 +24,7 @@ SETUP = "setup"            # aucun profil enrôlé : aucune action automatique
 OWNER_MEMORY = 1.2         # le propriétaire reste "présent" ce temps après sa dernière détection
 LOOK_GAP = 0.6             # une détection manquée isolée ne remet pas le compte à rebours à zéro
 STARTUP_GRACE = 8.0        # temps laissé à la caméra pour s'ouvrir avant de la déclarer perdue
+OPENING_GRACE = 30.0       # si Windows est encore en train de l'ouvrir (lent après un déverrouillage)
 
 
 @dataclass
@@ -38,6 +39,7 @@ class Observation:
     ts: float
     camera_ok: bool
     faces: list[FaceObs] = field(default_factory=list)
+    camera_opening: bool = False
 
 
 @dataclass
@@ -122,7 +124,8 @@ class Guard:
 
         # Caméra
         if not obs.camera_ok:
-            if not self._started and now - self._start_ref < STARTUP_GRACE:
+            grace = OPENING_GRACE if obs.camera_opening else STARTUP_GRACE
+            if not self._started and now - self._start_ref < grace:
                 return Verdict(STARTING)
             if self._cam_lost_since is None:
                 self._cam_lost_since = now

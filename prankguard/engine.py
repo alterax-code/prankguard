@@ -247,7 +247,7 @@ class Engine:
                 seq2, ts, frame = self.camera.wait_newer(seq, timeout=0.5)
                 now = time.time()
                 if frame is None or now - ts > 1.5:
-                    self._step_guard(G.Observation(now, False))
+                    self._step_guard(G.Observation(now, False, camera_opening=self.camera.opening))
                     continue
                 if seq2 == seq:
                     continue

@@ -364,3 +364,19 @@ def test_device_policy_not_enrolled(action, expected):
     g = Guard(Settings(device_action=action))
     g.enrolled = False
     assert g.device_policy(10.0) == expected
+
+
+def test_slow_camera_opening_after_unlock_is_not_camera_lost():
+    """Terrain : caméra ouverte en 27 s après un déverrouillage -> faux verrouillage « caméra masquée »."""
+    g = Guard(Settings(lock_on_camera_lost=True, camera_lost_delay=6))
+    g.on_session_unlocked(0.0)
+    for t in (5.0, 12.0, 20.0, 27.0):
+        assert g.step(Observation(t, False, camera_opening=True)).state == G.STARTING
+    v = g.step(Observation(31.0, False, camera_opening=True))      # au-delà de 30 s : perdue
+    assert v.state == G.CAMERA_LOST
+
+
+def test_camera_not_opening_still_gets_short_grace():
+    g = Guard(Settings(lock_on_camera_lost=True, camera_lost_delay=6))
+    g.on_session_unlocked(0.0)
+    assert g.step(Observation(9.0, False)).state == G.CAMERA_LOST
