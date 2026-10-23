@@ -165,15 +165,23 @@ def _make_handler(srv: Server):
 
     @post_("/api/profiles/delete")
     def _profiles_delete(h, body):
-        ok = app.gallery.remove(str(body.get("name", "")))
+        name = str(body.get("name", ""))
+        ok = app.gallery.remove(name)
         app.engine.reload_gallery()
+        if ok:
+            left = len(app.gallery.people)
+            app.events.add("enroll", "warning" if not left else "info", f"Profil « {name} » supprimé",
+                           "Plus aucun profil : reconnaissance faciale inactive" if not left else f"{left} profil(s) restant(s)")
         return {"ok": ok}
 
     @post_("/api/profiles/rename")
     def _profiles_rename(h, body):
         new = str(body.get("new", "")).strip()[:40]
-        ok = bool(new) and app.gallery.rename(str(body.get("old", "")), new)
+        old = str(body.get("old", ""))
+        ok = bool(new) and app.gallery.rename(old, new)
         app.engine.reload_gallery()
+        if ok:
+            app.events.add("enroll", "info", f"Profil « {old} » renommé en « {new} »")
         return {"ok": ok}
 
     @post_("/api/enroll/start")

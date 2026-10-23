@@ -211,7 +211,8 @@ class Guard:
         if not self.armed or self.locked or a == "off":
             return "off"
         if not self.enrolled:
-            return "notify"
+            # « Toujours » ne dépend pas de la reconnaissance ; « Si absent » si (impossible sans profil)
+            return "lock" if a == "lock" else "notify"
         if a == "lock_if_away":
             return "notify" if self.owner_recent(now) else "lock"
         return a

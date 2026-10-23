@@ -358,8 +358,9 @@ def test_device_policy_disarmed_or_locked_is_off(action):
 
 
 @pytest.mark.parametrize("action,expected", [("off", "off"), ("notify", "notify"),
-                                              ("lock_if_away", "notify"), ("lock", "notify")])
-def test_device_policy_not_enrolled_only_notifies(action, expected):
+                                              ("lock_if_away", "notify"), ("lock", "lock")])
+def test_device_policy_not_enrolled(action, expected):
+    """Sans profil, « Si absent » ne peut pas savoir si on est là -> notifie ; « Toujours » verrouille."""
     g = Guard(Settings(device_action=action))
     g.enrolled = False
     assert g.device_policy(10.0) == expected

@@ -34,7 +34,7 @@ const STATES = {
   camera_lost: { k: "Caméra", t: "Caméra indisponible", s: "La caméra est masquée, débranchée ou utilisée ailleurs.", i: "i-alert" },
   paused:      { k: "En pause", t: "Surveillance désactivée", s: "Aucun verrouillage automatique.", i: "i-pause" },
   locked:      { k: "Verrouillé", t: "Session verrouillée", s: "Caméra libérée jusqu'au déverrouillage.", i: "i-lock" },
-  setup:       { k: "Configuration", t: "Enregistrez votre visage", s: "Aucun verrouillage automatique tant qu'aucun profil n'est enregistré.", i: "i-scan" },
+  setup:       { k: "Configuration", t: "Enregistrez votre visage", s: "Sans profil, seule la règle « périphériques : Toujours » peut verrouiller.", i: "i-scan" },
 };
 const SHORT = { starting: "Démarrage…", arming: "Armement…", idle: "Protégé", secure: "Protégé", watch: "Vigilance",
   alert: "Intrusion !", surfer: "Regard indiscret", camera_lost: "Caméra indisponible", paused: "En pause", locked: "Verrouillé", setup: "À configurer" };
@@ -124,6 +124,7 @@ function onState(st) {
   $("#armToggle").checked = st.armed;
   $("#armLabel").textContent = st.armed ? "Surveillance active" : (st.snooze_left ? `Pause · ${fmtDur(st.snooze_left)}` : "Surveillance coupée");
   $("#resumeBtn").hidden = st.armed;
+  $("#setupBtn").hidden = st.profiles > 0;
   $("#snoozeDrop").hidden = !st.armed;
   $("#navProfiles").textContent = st.profiles || "";
 
@@ -306,6 +307,7 @@ function renderStats() {
 // ── Actions principales ─────────────────────────────────────────────────────
 $("#armToggle").addEventListener("change", e => api("/api/arm", { armed: e.target.checked }));
 $("#resumeBtn").addEventListener("click", () => api("/api/arm", { armed: true }));
+$("#setupBtn").addEventListener("click", () => { go("profiles"); openEnroll(); });
 $("#lockBtn").addEventListener("click", () => api("/api/lock", {}));
 $("#snoozeBtn").addEventListener("click", e => { e.stopPropagation(); $("#snoozeDrop").classList.toggle("open"); });
 $$("[data-snooze]").forEach(b => b.addEventListener("click", () => {

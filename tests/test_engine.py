@@ -147,3 +147,12 @@ def test_manual_lock_is_ignored_when_already_locked(eng, locks):
     eng.lock_now()
     eng.lock_now()
     assert locks == [1]
+
+
+def test_device_locks_without_any_profile_when_rule_is_always(eng, locks):
+    """Bug terrain : profils supprimés -> les branchements ne faisaient plus que notifier."""
+    eng.gallery.remove("alice")
+    eng.reload_gallery()
+    assert not eng.guard.enrolled
+    eng._on_device(_dev("hid"))
+    assert locks == [1]
