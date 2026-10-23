@@ -257,3 +257,22 @@ def test_matcher_set_gallery_replaces_previous():
     assert m.best(unit(5))[0] == "b"
     m.set_gallery({})
     assert m.empty
+
+
+def test_strict_threshold_never_turns_owner_into_stranger():
+    """Terrain : exigence à 60 % -> le propriétaire à 0,45 devenait « inconnu » (faux regard indiscret)."""
+    t = new_track()
+    for i in range(8):
+        t.observe_similarity("alice", 0.45, 0.60, 1.0 + i * 0.3)
+    assert t.status == "pending"
+
+
+def test_known_owner_needs_three_consecutive_misses():
+    t = new_track()
+    t.observe_similarity("alice", 0.80, 0.42, 1.0)
+    for i, s in enumerate([0.10, 0.10, 0.75, 0.10, 0.10]):
+        t.observe_similarity("alice", s, 0.42, 2.0 + i)
+    assert t.status == "known"
+    t.observe_similarity("alice", 0.10, 0.42, 9.0)
+    t.observe_similarity("alice", 0.10, 0.42, 10.0)
+    assert t.status == "unknown"

@@ -26,6 +26,8 @@ class PrankGuardApp:
         self.debug = debug
         self.stopping = False
         self.window = None
+        self.prompt_window = None
+        self._prompt_lock = threading.Lock()
         self.ui_visible = True
         paths.ensure_dirs()
         self.config = ConfigStore()
@@ -38,6 +40,7 @@ class PrankGuardApp:
 
         self.engine.on_change = self._on_engine_change
         self.engine.notify = self._notify
+        self.engine.on_device_prompt = self._on_device_prompt
         self.events.subscribe(self.server.hub.push_event)
         self.engine.watcher.on_endsession = self._on_endsession
         self._quit_done = threading.Event()
@@ -51,6 +54,29 @@ class PrankGuardApp:
     def _notify(self, title: str, msg: str) -> None:
         if self.tray:
             self.tray.notify(title, msg)
+
+    def _on_device_prompt(self, info: dict | None) -> None:
+        """Petite fenêtre au premier plan pour approuver un branchement (même si l'UI est masquée)."""
+        if self.headless or self.window is None or self.stopping:
+            return              # sans interface : pas de réponse possible, le délai verrouillera
+        import webview
+        with self._prompt_lock:
+            if info is None:
+                w, self.prompt_window = self.prompt_window, None
+                if w:
+                    try:
+                        w.destroy()
+                    except Exception:
+                        log.exception("Fermeture de la fenêtre de décision")
+                return
+            if self.prompt_window is not None:
+                return          # déjà ouverte : elle se met à jour par SSE
+            url = f"http://127.0.0.1:{self.server.port}/prompt.html#t={self.server.token}"
+            self.prompt_window = webview.create_window(
+                "PrankGuard — nouveau périphérique", url, width=480, height=340, resizable=False,
+                frameless=True, easy_drag=True, on_top=True, focus=True, background_color="#0b0e14")
+        if self.tray:
+            self.tray.notify("Nouveau périphérique", "Autorisez-le ou refusez-le dans la fenêtre PrankGuard.")
 
     # ── Fenêtre ──
     def show_window(self) -> None:

@@ -338,7 +338,7 @@ def test_session_unlocked_while_disarmed_stays_paused():
     ("off", True, "off"), ("off", False, "off"),
     ("notify", True, "notify"), ("notify", False, "notify"),
     ("lock", True, "lock"), ("lock", False, "lock"),
-    ("lock_if_away", True, "notify"), ("lock_if_away", False, "lock"),
+    ("ask", True, "ask"), ("ask", False, "lock"),
 ])
 def test_device_policy_armed_enrolled(action, owner_here, expected):
     g = Guard(Settings(device_action=action))
@@ -347,7 +347,7 @@ def test_device_policy_armed_enrolled(action, owner_here, expected):
     assert g.device_policy(now) == expected
 
 
-@pytest.mark.parametrize("action", ["off", "notify", "lock_if_away", "lock"])
+@pytest.mark.parametrize("action", ["off", "notify", "ask", "lock"])
 def test_device_policy_disarmed_or_locked_is_off(action):
     g = Guard(Settings(device_action=action))
     g.disarm()
@@ -358,9 +358,9 @@ def test_device_policy_disarmed_or_locked_is_off(action):
 
 
 @pytest.mark.parametrize("action,expected", [("off", "off"), ("notify", "notify"),
-                                              ("lock_if_away", "notify"), ("lock", "lock")])
+                                              ("ask", "ask"), ("lock", "lock")])
 def test_device_policy_not_enrolled(action, expected):
-    """Sans profil, « Si absent » ne peut pas savoir si on est là -> notifie ; « Toujours » verrouille."""
+    """Sans profil, « Demander » demande (le délai verrouille) ; « Toujours » verrouille."""
     g = Guard(Settings(device_action=action))
     g.enrolled = False
     assert g.device_policy(10.0) == expected

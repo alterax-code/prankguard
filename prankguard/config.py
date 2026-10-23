@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from . import paths
@@ -25,12 +25,18 @@ _BOUNDS = {
     "camera_width": (320, 1920),
     "camera_height": (240, 1080),
     "alarm_volume": (0, 100),
+    "device_prompt_timeout": (3.0, 30.0),
 }
 
 _CHOICES = {
     "surfer_action": {"off", "warn", "lock"},
-    "device_action": {"off", "notify", "lock_if_away", "lock"},
+    "device_action": {"off", "notify", "ask", "lock"},
 }
+
+# Familles de périphériques surveillées (cf. winsys.classify)
+DEVICE_CATEGORIES = ("keyboard", "mouse", "storage", "phone", "hid", "usb", "network", "bluetooth",
+                     "printer", "display", "audio", "camera", "serial", "other")
+_LEGACY = {("device_action", "lock_if_away"): "ask"}
 
 
 @dataclass
@@ -55,8 +61,11 @@ class Settings:
     rearm_delay: float = 3.0          # délai après déverrouillage avant de réarmer
 
     # Périphériques
-    device_action: str = "lock_if_away"   # off | notify | lock_if_away | lock
-    trusted_devices: tuple = ()
+    device_action: str = "ask"        # off | notify | ask (demande si présent, sinon verrouille) | lock
+    device_prompt_timeout: float = 5.0  # sans réponse dans ce délai : verrouillage
+    device_categories: tuple = DEVICE_CATEGORIES  # familles qui déclenchent la règle
+    trusted_devices: tuple = ()       # clés (VID:PID) approuvées pour toujours
+    device_names: dict = field(default_factory=dict)  # clé -> nom lisible des périphériques mémorisés
 
     # Caméra
     camera_index: int = 0
@@ -78,6 +87,7 @@ class Settings:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["trusted_devices"] = list(self.trusted_devices)
+        d["device_categories"] = list(self.device_categories)
         return d
 
 
@@ -96,9 +106,16 @@ def _coerce(name: str, value, default):
     elif isinstance(default, tuple):
         if not isinstance(value, (list, tuple)):
             raise ValueError(name)
-        return tuple(str(x) for x in value)[:500]
+        items = tuple(dict.fromkeys(str(x) for x in value))[:500]
+        if name == "device_categories":
+            items = tuple(c for c in items if c in DEVICE_CATEGORIES)
+        return items
+    elif isinstance(default, dict):
+        if not isinstance(value, dict):
+            raise ValueError(name)
+        return {str(k)[:200]: str(v)[:200] for k, v in list(value.items())[:500]}
     else:
-        v = str(value)
+        v = _LEGACY.get((name, str(value)), str(value))
         if name in _CHOICES and v not in _CHOICES[name]:
             raise ValueError(name)
         return v

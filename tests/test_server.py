@@ -55,6 +55,10 @@ class FakeEngine:
     def cancel_enroll(self):
         self.calls.append(("cancel_enroll",))
 
+    def decide_device(self, prompt_id, decision):
+        self.calls.append(("decide", prompt_id, decision))
+        return prompt_id == 7
+
     def reload_gallery(self):
         self.calls.append(("reload_gallery",))
 
@@ -451,3 +455,15 @@ def test_sse_first_event_is_state_then_receives_pushes(srv):
         assert b'"state": "alert"' in got
     finally:
         s.close()
+
+
+def test_device_decision_is_forwarded(srv):
+    assert jpost(srv, "/api/devices/decide", {"id": 7, "decision": "always"}) == {"ok": True}
+    assert jpost(srv, "/api/devices/decide", {"id": 8, "decision": "once"}) == {"ok": False}
+    assert jpost(srv, "/api/devices/decide", {"id": "x", "decision": "once"}) == {"ok": False}
+    assert ("decide", 7, "always") in srv.fake_app.engine.calls
+
+
+def test_trust_from_journal_keeps_device_name(srv):
+    jpost(srv, "/api/devices/trust", {"key": "0781:5581", "name": "SanDisk Ultra"})
+    assert jget(srv, "/api/settings")["device_names"]["0781:5581"] == "SanDisk Ultra"

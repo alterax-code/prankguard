@@ -10,7 +10,7 @@ l'écran, la session se verrouille aussitôt. Tout tourne en local, sans compte,
 |---|---|
 | **Inconnu devant l'écran** | Verrouillage après 1,5 s si un visage non enregistré regarde l'écran en votre absence |
 | **Regard indiscret** | Notification quand quelqu'un lit par-dessus votre épaule (ou verrouillage, au choix) |
-| **Périphériques** | Clé USB, clavier, souris, écran, téléphone… branché en votre absence → verrouillage ; devant l'écran → notification |
+| **Périphériques** | Clé USB, clavier, souris, écran, réseau, imprimante… branché devant l'écran → fenêtre « autoriser cette fois / toujours / refuser » avec clavier bloqué (anti-BadUSB) ; refus, silence (5 s) ou absence → verrouillage et éjection du périphérique USB |
 | **Caméra masquée / débranchée** | Verrouillage après 6 s |
 | **Absence** (optionnel) | Verrouillage si vous quittez votre poste |
 | **Anti-photo** | Les posters, photos et écrans sont ignorés (anti-spoofing MiniFASNet) |

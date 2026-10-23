@@ -34,7 +34,7 @@ const STATES = {
   camera_lost: { k: "Caméra", t: "Caméra indisponible", s: "La caméra est masquée, débranchée ou utilisée ailleurs.", i: "i-alert" },
   paused:      { k: "En pause", t: "Surveillance désactivée", s: "Aucun verrouillage automatique.", i: "i-pause" },
   locked:      { k: "Verrouillé", t: "Session verrouillée", s: "Caméra libérée jusqu'au déverrouillage.", i: "i-lock" },
-  setup:       { k: "Configuration", t: "Enregistrez votre visage", s: "Sans profil, seule la règle « périphériques : Toujours » peut verrouiller.", i: "i-scan" },
+  setup:       { k: "Configuration", t: "Enregistrez votre visage", s: "Sans profil, seules les règles de périphériques peuvent verrouiller.", i: "i-scan" },
 };
 const SHORT = { starting: "Démarrage…", arming: "Armement…", idle: "Protégé", secure: "Protégé", watch: "Vigilance",
   alert: "Intrusion !", surfer: "Regard indiscret", camera_lost: "Caméra indisponible", paused: "En pause", locked: "Verrouillé", setup: "À configurer" };
@@ -144,6 +144,7 @@ function onState(st) {
       api("/api/enroll/cancel", {}).finally(() => setTimeout(() => { S.cancelSent = false; }, 2000));
     }
   }
+  if (S.page === "settings") renderLiveScore(st);
   if (!prev || prev.profiles !== st.profiles) { if (S.page === "profiles") loadProfiles(); renderRules(); }
 }
 
@@ -236,7 +237,7 @@ function timelineItem(ev) {
     if (key) {
       const trusted = (S.settings?.trusted_devices || []).includes(key);
       extra = trusted ? `<span class="muted small">Approuvé</span>`
-        : `<button class="btn sm ghost" data-trust="${esc(key)}">${icon("i-check")}Approuver</button>`;
+        : `<button class="btn sm ghost" data-trust="${esc(key)}" data-name="${esc((ev.title || "").replace(/^Branché : /, ""))}">${icon("i-check")}Approuver</button>`;
     }
   }
   li.innerHTML = `<span class="ic">${icon(EV_ICON[ev.kind] || "i-info")}</span>
@@ -283,7 +284,7 @@ $("#timeline").addEventListener("click", async e => {
   if (img) { $("#lightbox img").src = img.src; $("#lightbox").hidden = false; return; }
   const t = e.target.closest("[data-trust]");
   if (t) {
-    await api("/api/devices/trust", { key: t.dataset.trust });
+    await api("/api/devices/trust", { key: t.dataset.trust, name: t.dataset.name || "" });
     await loadSettings();
     t.outerHTML = `<span class="muted small">Approuvé</span>`;
     toast("Périphérique approuvé", "ok", "i-check");
@@ -496,6 +497,22 @@ function renderEnroll(p) {
 
 // ── Réglages ────────────────────────────────────────────────────────────────
 const deg = v => `±${Math.round(v * 55)}°`;  // yaw normalisé ≈ 0.18 par 10°
+const DEVICE_CATEGORIES = [["keyboard", "Claviers"], ["mouse", "Souris"], ["storage", "Clés & disques"], ["phone", "Téléphones"],
+  ["hid", "HID"], ["usb", "Autres USB"], ["network", "Réseau / Wi-Fi"], ["bluetooth", "Bluetooth"], ["printer", "Imprimantes"],
+  ["display", "Écrans"], ["audio", "Audio"], ["camera", "Caméras"], ["serial", "Ports série"], ["other", "Autres"]];
+const strictness = v => v < .36 ? "Tolérant" : v < .46 ? "Équilibré" : v < .53 ? "Strict" : "Très strict";
+
+function renderLiveScore(st) {
+  const el = $("#liveScore");
+  if (!el || !S.settings) return;
+  const me = (st.faces || []).filter(f => f.sim != null).sort((a, b) => b.sim - a.sim)[0];
+  if (!me) { el.textContent = "Placez-vous devant la caméra pour voir votre score actuel."; el.className = "live-score"; return; }
+  const thr = S.settings.match_threshold, margin = me.sim - thr;
+  el.textContent = `Votre score en ce moment : ${Math.round(me.sim * 100)} % — ` +
+    (margin >= .1 ? "marge confortable" : margin >= 0 ? "marge faible, baissez un peu l'exigence" : "sous le seuil : baissez l'exigence");
+  el.className = "live-score " + (margin >= .1 ? "ok" : margin >= 0 ? "warn" : "bad");
+}
+
 const SCHEMA = [
   { title: "Verrouillage", icon: "i-lock", rows: [
     { k: "lock_on_stranger", type: "toggle", label: "Inconnu devant l'écran", desc: "Verrouille quand un visage non autorisé regarde l'écran en votre absence." },
@@ -509,13 +526,15 @@ const SCHEMA = [
     { k: "rearm_delay", type: "range", min: 0, max: 30, step: 1, unit: " s", label: "Réarmement", desc: "Délai de grâce après le déverrouillage de la session." },
   ]},
   { title: "Reconnaissance", icon: "i-scan", rows: [
-    { k: "match_threshold", type: "range", min: .3, max: .6, step: .01, label: "Exigence de reconnaissance", desc: "Plus strict = moins de risques de confusion, mais reconnaissance plus exigeante.", ends: ["Tolérant", "Strict"], fmt: v => Math.round(v * 100) + "%" },
+    { k: "match_threshold", type: "range", min: .3, max: .6, step: .01, label: "Exigence de reconnaissance", desc: "Score minimal pour vous reconnaître. Gardez une marge sous votre score habituel.<em class=\"live-score\" id=\"liveScore\"></em>", ends: ["Tolérant", "Strict"], fmt: v => `${Math.round(v * 100)} % · ${strictness(v)}` },
     { k: "min_face_size", type: "range", min: .05, max: .3, step: .01, label: "Portée de détection", desc: "Taille minimale d'un visage pour estimer qu'il lit l'écran.", ends: ["Loin", "Proche"], fmt: v => Math.round(v * 100) + "%" },
     { k: "max_yaw", type: "range", min: .2, max: .9, step: .05, label: "Angle de regard toléré", desc: "Au-delà, une personne de profil n'est pas considérée comme lisant l'écran.", ends: ["Strict", "Large"], fmt: deg },
     { k: "anti_spoof", type: "toggle", label: "Ignorer photos et écrans", desc: "Anti-spoofing : un poster ou une photo ne déclenche rien et ne vous imite pas." },
   ]},
   { title: "Périphériques", icon: "i-plug", rows: [
-    { k: "device_action", type: "seg", label: "Branchement d'un périphérique", desc: "« Si absent » : verrouille seulement si vous n'êtes pas devant l'écran.", options: [["off", "Ignorer"], ["notify", "Notifier"], ["lock_if_away", "Si absent"], ["lock", "Toujours"]] },
+    { k: "device_action", type: "seg", label: "Branchement d'un périphérique", desc: "« Demander » : fenêtre d'autorisation si vous êtes là, clavier bloqué en attendant. Refus, silence ou absence : verrouillage.", options: [["off", "Ignorer"], ["notify", "Notifier"], ["ask", "Demander"], ["lock", "Verrouiller"]] },
+    { k: "device_prompt_timeout", type: "range", min: 3, max: 30, step: 1, unit: " s", label: "Temps pour répondre", sub: true, dep: s => s.device_action === "ask" },
+    { k: "device_categories", type: "chips", label: "Familles surveillées", desc: "Décochez ce qui ne doit jamais déclencher la règle.", dep: s => s.device_action !== "off", options: DEVICE_CATEGORIES },
     { type: "trusted" },
   ]},
   { title: "Caméra", icon: "i-video", rows: [
@@ -600,12 +619,22 @@ function settingRow(row) {
         saveSetting({ camera_width: w, camera_height: h });
       } else saveSetting({ [row.k]: +e.target.value });
     });
+  } else if (row.type === "chips") {
+    const on = new Set(v || []);
+    el.classList.add("chips-row");
+    el.innerHTML = `${lbl}<div class="chips">${row.options.map(([k, l]) => `<button data-v="${k}" class="chip ${on.has(k) ? "active" : ""}">${l}</button>`).join("")}</div>`;
+    $(".chips", el).addEventListener("click", e => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      b.classList.toggle("active");
+      saveSetting({ [row.k]: $$("button.active", el).map(x => x.dataset.v) });
+    });
   } else if (row.type === "trusted") {
     const list = S.settings.trusted_devices || [];
     el.className = "trusted";
     el.innerHTML = list.length
       ? `<div class="lbl small muted" style="padding:4px 0 2px">Périphériques approuvés (jamais de verrouillage)</div>` +
-        list.map(k => `<div class="trusted-item">${icon("i-plug")}<code>${esc(k)}</code><button class="icon-btn del" data-untrust="${esc(k)}" title="Retirer">${icon("i-x")}</button></div>`).join("")
+        list.map(k => `<div class="trusted-item">${icon("i-plug")}<span class="trusted-name">${esc((S.settings.device_names || {})[k] || "Périphérique")}</span><code>${esc(k)}</code><button class="icon-btn del" data-untrust="${esc(k)}" title="Retirer">${icon("i-x")}</button></div>`).join("")
       : `<div class="small muted">Astuce : approuvez vos propres périphériques depuis le Journal pour ne plus être dérangé.</div>`;
     el.addEventListener("click", async e => {
       const b = e.target.closest("[data-untrust]");
@@ -638,7 +667,7 @@ function renderRules() {
   if (!s) return;
   const st = (on, label = on ? "Actif" : "Off", cls = on ? "on" : "") => `<span class="state ${cls}">${label}</span>`;
   const surfer = { off: st(false), warn: st(true, "Avertir", "warn"), lock: st(true, "Verrouiller") }[s.surfer_action];
-  const dev = { off: st(false), notify: st(true, "Notifier", "warn"), lock_if_away: st(true, "Si absent"), lock: st(true, "Toujours") }[s.device_action];
+  const dev = { off: st(false), notify: st(true, "Notifier", "warn"), ask: st(true, "Demander"), lock: st(true, "Verrouiller") }[s.device_action];
   $("#rules").innerHTML = `
     <div class="rule">${icon("i-scan")}Inconnu devant l'écran${st(s.lock_on_stranger, s.lock_on_stranger ? s.stranger_delay + " s" : "Off")}</div>
     <div class="rule">${icon("i-eye")}Regard indiscret${surfer}</div>

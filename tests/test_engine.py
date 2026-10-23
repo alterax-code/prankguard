@@ -167,3 +167,104 @@ def test_duplicate_unlock_is_ignored(eng, locks, monkeypatch):
     eng._on_session("unlock")
     assert added.count("session") == 1
     assert not eng.guard.locked
+
+
+# ── Demande d'approbation d'un branchement ───────────────────────────────────
+
+@pytest.fixture
+def ask(eng, monkeypatch):
+    """Propriétaire reconnu devant l'écran, règle « Demander »."""
+    calls = {"lock": 0, "eject": [], "prompt": []}
+    monkeypatch.setattr(winsys, "lock_workstation", lambda: calls.__setitem__("lock", calls["lock"] + 1) or True)
+    monkeypatch.setattr(winsys, "eject_device", lambda inst: calls["eject"].append(inst) or (True, inst))
+    monkeypatch.setattr(eng.camera, "pause", lambda: None)
+    monkeypatch.setattr(eng.camera, "resume", lambda: None)
+    monkeypatch.setattr(E, "chime", lambda: None)
+    eng.on_device_prompt = calls["prompt"].append
+    eng.config.update({"device_action": "ask", "device_prompt_timeout": 3})
+    eng._quiet_devices_until = 0.0
+    eng.guard.owner_last_seen = time.time() + 3600      # présent pendant tout le test
+    yield calls
+    if eng._prompt_timer:
+        eng._prompt_timer.cancel()
+
+
+def test_present_owner_is_asked_and_keyboard_blocked(eng, ask):
+    eng._on_device_early(_dev("hid"))
+    assert eng.keyboard.active                        # bloqué avant même la fusion de la rafale
+    eng._on_device(_dev("hid"))
+    assert ask["lock"] == 0
+    info = eng.snapshot()["device_prompt"]
+    assert info and info["devices"][0]["key"] == "1532:00B4"
+    assert ask["prompt"] and ask["prompt"][-1]["id"] == info["id"]
+
+
+def test_approve_once_unblocks_without_remembering(eng, ask):
+    eng._on_device(_dev("hid"))
+    pid = eng.snapshot()["device_prompt"]["id"]
+    assert eng.decide_device(pid, "once")
+    assert not eng.keyboard.active and ask["lock"] == 0 and ask["eject"] == []
+    assert "1532:00B4" not in eng.config.s.trusted_devices
+    assert ask["prompt"][-1] is None and eng.snapshot()["device_prompt"] is None
+
+
+def test_approve_always_remembers_device_with_its_name(eng, ask):
+    eng._on_device(_dev("hid"))
+    eng.decide_device(eng.snapshot()["device_prompt"]["id"], "always")
+    assert "1532:00B4" in eng.config.s.trusted_devices
+    assert eng.config.s.device_names["1532:00B4"] == "Razer"
+    eng._on_device(_dev("hid"))                       # rebranché : plus de question
+    assert eng.snapshot()["device_prompt"] is None
+
+
+def test_deny_ejects_and_locks(eng, ask):
+    eng._on_device(_dev("storage"))
+    eng.decide_device(eng.snapshot()["device_prompt"]["id"], "deny")
+    assert ask["lock"] == 1 and ask["eject"] == [r"USB\X"]
+    assert not eng.keyboard.active
+
+
+def test_no_answer_locks_after_timeout(eng, ask):
+    eng.config.update({"device_prompt_timeout": 3})
+    eng._on_device(_dev("hid"))
+    eng._prompt_timer.cancel()
+    eng._prompt_timer.function(*eng._prompt_timer.args)   # expiration simulée
+    assert ask["lock"] == 1 and ask["eject"] == [r"USB\X"]
+
+
+def test_stale_or_invalid_decision_is_rejected(eng, ask):
+    eng._on_device(_dev("hid"))
+    pid = eng.snapshot()["device_prompt"]["id"]
+    assert not eng.decide_device(pid + 1, "once")
+    assert not eng.decide_device(pid, "maybe")
+    assert eng.snapshot()["device_prompt"] is not None
+
+
+def test_absent_owner_is_not_asked(eng, ask):
+    """Personne de reconnu devant l'écran : la question pourrait être validée par l'intrus -> verrouillage."""
+    eng.guard.owner_last_seen = 0.0
+    eng._on_device(_dev("hid"))
+    assert ask["lock"] == 1 and eng.snapshot()["device_prompt"] is None
+
+
+def test_second_device_joins_pending_question(eng, ask):
+    eng._on_device(_dev("hid"))
+    eng._on_device(_dev("storage", key="0781:5581", name="SanDisk"))
+    info = eng.snapshot()["device_prompt"]
+    assert [d["name"] for d in info["devices"]] == ["Razer", "SanDisk"]
+    eng.decide_device(info["id"], "always")
+    assert {"1532:00B4", "0781:5581"} <= set(eng.config.s.trusted_devices)
+
+
+def test_unwatched_category_is_ignored(eng, ask):
+    eng.config.update({"device_categories": ["storage"]})
+    eng._on_device_early(_dev("hid"))
+    eng._on_device(_dev("hid"))
+    assert not eng.keyboard.active and ask["lock"] == 0 and eng.snapshot()["device_prompt"] is None
+
+
+def test_session_lock_during_question_refuses_device(eng, ask):
+    eng._on_device(_dev("hid"))
+    eng._on_session("lock")
+    assert eng.snapshot()["device_prompt"] is None and ask["eject"] == [r"USB\X"]
+    assert ask["lock"] == 0                            # déjà verrouillée : pas de second verrouillage

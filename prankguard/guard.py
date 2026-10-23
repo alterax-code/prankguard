@@ -206,13 +206,15 @@ class Guard:
 
     # ── Périphériques ──
     def device_policy(self, now: float) -> str:
-        """Action à appliquer à un branchement non approuvé : off | notify | lock."""
+        """Action à appliquer à un branchement non approuvé : off | notify | ask | lock.
+
+        « ask » ne demande que si le propriétaire est reconnu devant l'écran : sinon la question
+        pourrait être validée par l'intrus lui-même, on verrouille directement.
+        Sans profil, impossible de savoir qui répond : on demande quand même (le délai verrouille).
+        """
         a = self.s.device_action
         if not self.armed or self.locked or a == "off":
             return "off"
-        if not self.enrolled:
-            # « Toujours » ne dépend pas de la reconnaissance ; « Si absent » si (impossible sans profil)
-            return "lock" if a == "lock" else "notify"
-        if a == "lock_if_away":
-            return "notify" if self.owner_recent(now) else "lock"
+        if a == "ask" and self.enrolled and not self.owner_recent(now):
+            return "lock"
         return a

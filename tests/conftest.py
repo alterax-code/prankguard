@@ -40,6 +40,23 @@ def _forbid_dangerous_side_effects(monkeypatch):
 
     monkeypatch.setattr(winsys, "lock_workstation", _boom)
     monkeypatch.setattr(winsys, "set_autostart", _boom)
+    # ni vrai hook clavier global (bloquerait le clavier de l'utilisateur), ni vraie éjection
+    monkeypatch.setattr(winsys, "KeyboardBlocker", FakeKeyboard)
+    monkeypatch.setattr(winsys, "eject_device", lambda instance: (False, "désactivé en test"))
+
+
+class FakeKeyboard:
+    def __init__(self):
+        self.active = False
+        self.starts = 0
+
+    def start(self) -> bool:
+        self.active = True
+        self.starts += 1
+        return True
+
+    def stop(self) -> None:
+        self.active = False
 
 
 @pytest.fixture

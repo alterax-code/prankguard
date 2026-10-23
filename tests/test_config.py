@@ -83,7 +83,7 @@ def test_valid_choices_accepted(path):
     for v in ("off", "warn", "lock"):
         store.update({"surfer_action": v})
         assert store.s.surfer_action == v
-    for v in ("off", "notify", "lock_if_away", "lock"):
+    for v in ("off", "notify", "ask", "lock"):
         store.update({"device_action": v})
         assert store.s.device_action == v
 
@@ -177,3 +177,23 @@ def test_failing_listener_does_not_break_update_or_other_listeners(path):
     assert store.update({"alarm_enabled": True}) == {"alarm_enabled": True}
     assert seen == [{"alarm_enabled": True}]
     assert ConfigStore(path).s.alarm_enabled is True
+
+
+def test_legacy_lock_if_away_migrates_to_ask(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"device_action": "lock_if_away"}', encoding="utf-8")
+    assert ConfigStore(path).s.device_action == "ask"
+
+
+def test_device_categories_filtered_and_deduplicated(path):
+    store = ConfigStore(path)
+    store.update({"device_categories": ["storage", "bogus", "storage", "printer"]})
+    assert store.s.device_categories == ("storage", "printer")
+
+
+def test_device_names_must_be_a_mapping(path):
+    store = ConfigStore(path)
+    store.update({"device_names": ["x"]})
+    assert store.s.device_names == {}
+    store.update({"device_names": {"1532:00B4": "Razer"}})
+    assert store.s.device_names == {"1532:00B4": "Razer"}

@@ -25,9 +25,11 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
 wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
+cfgmgr32 = ctypes.WinDLL("cfgmgr32", use_last_error=True)
 
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class WNDCLASSEXW(ctypes.Structure):
@@ -87,6 +89,19 @@ user32.LockWorkStation.restype = wintypes.BOOL
 user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 user32.OpenInputDesktop.restype = wintypes.HANDLE
 user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = LRESULT
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT,
+                                wintypes.UINT]
+cfgmgr32.CM_Locate_DevNodeW.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.LPCWSTR, wintypes.ULONG]
+cfgmgr32.CM_Get_Parent.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, wintypes.ULONG]
+cfgmgr32.CM_Get_Device_IDW.argtypes = [wintypes.DWORD, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
+cfgmgr32.CM_Request_Device_EjectW.argtypes = [wintypes.DWORD, ctypes.POINTER(ctypes.c_int), wintypes.LPWSTR,
+                                              wintypes.ULONG, wintypes.ULONG]
 kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
@@ -110,6 +125,7 @@ WM_POWERBROADCAST = 0x0218
 WM_WTSSESSION_CHANGE = 0x02B1
 WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION = 0x0016
+WM_QUIT = 0x0012
 DBT_DEVICEARRIVAL = 0x8000
 DBT_DEVICEREMOVECOMPLETE = 0x8004
 DBT_DEVTYP_DEVICEINTERFACE = 5
@@ -316,6 +332,9 @@ class SystemWatcher:
                  on_power: Callable[[str], None] | None = None,
                  on_display: Callable[[], None] | None = None):
         self.on_device = on_device
+        # appelé dès la première interface d'un branchement, avant la fusion de la rafale (0,8 s) :
+        # sert à bloquer le clavier avant qu'une clé « BadUSB » ait le temps de taper
+        self.on_device_early: Callable[[DeviceArrival], None] | None = None
         self.on_session = on_session
         self.on_power = on_power
         self.on_display = on_display
@@ -424,12 +443,18 @@ class SystemWatcher:
         if dev is None:
             return
         with self._burst_lock:
+            first = not self._burst
             self._burst.append(dev)
             if self._burst_timer:
                 self._burst_timer.cancel()
             self._burst_timer = threading.Timer(self.BURST_WINDOW, self._flush_burst)
             self._burst_timer.daemon = True
             self._burst_timer.start()
+        if first and self.on_device_early:
+            try:
+                self.on_device_early(dev)
+            except Exception:
+                log.exception("Callback périphérique (précoce) en erreur")
 
     def _flush_burst(self) -> None:
         with self._burst_lock:
@@ -439,3 +464,129 @@ class SystemWatcher:
                 self.on_device(merge_burst(items))
             except Exception:
                 log.exception("Callback périphérique en erreur")
+
+
+# ── Blocage clavier & éjection ───────────────────────────────────────────────
+
+
+class KeyboardBlocker:
+    """Avale les frappes clavier tant qu'il est actif (hook bas niveau, sans droits admin).
+
+    Neutralise les clés « BadUSB » qui tapent des commandes dès le branchement, le temps que
+    le propriétaire réponde à la souris. Les relâchements de touches passent (pas de touche
+    « coincée ») et Ctrl+Alt+Suppr reste toujours géré par Windows.
+    """
+
+    MAX_SECONDS = 60.0     # filet : le clavier n'est jamais bloqué plus longtemps
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._tid = 0
+        self._ok = False
+        self._ready = threading.Event()
+        self._timer: threading.Timer | None = None
+        self._proc = None
+        self.swallowed = 0
+
+    @property
+    def active(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> bool:
+        with self._lock:
+            if self.active:
+                return True
+            self._ready.clear()
+            self._ok, self.swallowed = False, 0
+            self._thread = threading.Thread(target=self._run, name="KeyboardBlocker", daemon=True)
+            self._thread.start()
+        self._ready.wait(2.0)
+        if self._ok:
+            with self._lock:
+                self._timer = threading.Timer(self.MAX_SECONDS, self.stop)
+                self._timer.daemon = True
+                self._timer.start()
+            log.info("Clavier bloqué en attendant votre décision")
+        return self._ok
+
+    def stop(self) -> None:
+        with self._lock:
+            t, tid, timer = self._thread, self._tid, self._timer
+            self._timer = None
+        if timer:
+            timer.cancel()
+        if t and t.is_alive() and tid:
+            user32.PostThreadMessageW(tid, WM_QUIT, 0, 0)
+            if t is not threading.current_thread():
+                t.join(2.0)
+            log.info("Clavier débloqué (%d frappe(s) bloquée(s))", self.swallowed)
+
+    def _run(self) -> None:
+        WH_KEYBOARD_LL, HC_ACTION, PM_NOREMOVE = 13, 0, 0
+        KEYDOWNS = (0x0100, 0x0104)          # WM_KEYDOWN, WM_SYSKEYDOWN
+        self._tid = kernel32.GetCurrentThreadId()
+        msg = wintypes.MSG()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_NOREMOVE)   # crée la file de messages
+
+        def proc(code, wparam, lparam):
+            if code == HC_ACTION and wparam in KEYDOWNS:
+                self.swallowed += 1
+                return 1
+            return user32.CallNextHookEx(None, code, wparam, lparam)
+
+        self._proc = HOOKPROC(proc)
+        hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, kernel32.GetModuleHandleW(None), 0)
+        self._ok = bool(hook)
+        self._ready.set()
+        if not hook:
+            log.warning("Blocage clavier impossible (%s)", ctypes.get_last_error())
+            return
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+        finally:
+            user32.UnhookWindowsHookEx(hook)
+
+
+def _device_id(devinst: int) -> str:
+    buf = ctypes.create_unicode_buffer(512)
+    if cfgmgr32.CM_Get_Device_IDW(devinst, buf, len(buf), 0) != 0:
+        return ""
+    return buf.value
+
+
+def physical_device(instance: str) -> tuple[int, str] | None:
+    """Remonte d'une interface (HID, USBSTOR, fonction USB &MI_xx) au périphérique USB physique."""
+    node = wintypes.DWORD()
+    if cfgmgr32.CM_Locate_DevNodeW(ctypes.byref(node), instance, 0) != 0:
+        return None
+    cur = node.value
+    for _ in range(8):
+        iid = _device_id(cur).upper()
+        if iid.startswith("USB\\VID_") and "&MI_" not in iid:
+            return cur, iid
+        parent = wintypes.DWORD()
+        if cfgmgr32.CM_Get_Parent(ctypes.byref(parent), cur, 0) != 0:
+            break
+        cur = parent.value
+    return node.value, _device_id(node.value).upper()
+
+
+def eject_device(instance: str) -> tuple[bool, str]:
+    """Équivalent « Retirer le périphérique en toute sécurité » (sans droits admin). Retourne (ok, détail)."""
+    found = physical_device(instance)
+    if not found:
+        return False, "introuvable (déjà retiré ?)"
+    devinst, iid = found
+    if not iid.startswith("USB\\VID_"):
+        return False, f"non USB ({iid})"
+    veto_type, veto = ctypes.c_int(0), ctypes.create_unicode_buffer(260)
+    rc = cfgmgr32.CM_Request_Device_EjectW(devinst, ctypes.byref(veto_type), veto, len(veto), 0)
+    if rc == 0 and veto_type.value == 0:
+        log.warning("Périphérique éjecté : %s", iid)
+        return True, iid
+    detail = f"refusé par Windows (code {rc}, veto {veto_type.value} {veto.value})"
+    log.warning("Éjection de %s : %s", iid, detail)
+    return False, detail

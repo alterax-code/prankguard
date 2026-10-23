@@ -224,8 +224,20 @@ def _make_handler(srv: Server):
         trusted = list(app.config.s.trusted_devices)
         if key not in trusted:
             trusted.append(key)
-        app.config.update({"trusted_devices": trusted})
+        changes = {"trusted_devices": trusted}
+        name = str(body.get("name", "")).strip()[:200]
+        if name:
+            changes["device_names"] = {**app.config.s.device_names, key: name}
+        app.config.update(changes)
         return {"ok": True}
+
+    @post_("/api/devices/decide")
+    def _decide(h, body):
+        try:
+            pid = int(body.get("id"))
+        except (TypeError, ValueError):
+            return {"ok": False}
+        return {"ok": app.engine.decide_device(pid, str(body.get("decision", "")))}
 
     @post_("/api/devices/untrust")
     def _untrust(h, body):

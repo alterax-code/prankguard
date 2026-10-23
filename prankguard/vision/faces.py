@@ -210,6 +210,11 @@ class Track:
     live_n: int = 0
 
     UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
+    UNKNOWN_MAX = 0.30        # plafond absolu : un seuil « strict » ne transforme jamais le propriétaire en inconnu
+
+    @classmethod
+    def unknown_below(cls, threshold: float) -> float:
+        return min(threshold - cls.UNKNOWN_GAP, cls.UNKNOWN_MAX)
 
     def observe_liveness(self, p_real: float) -> None:
         self.live = p_real if self.live is None else 0.5 * p_real + 0.5 * self.live
@@ -231,9 +236,9 @@ class Track:
             # reconnu : immédiat si très net, sinon après 2 observations
             if sim >= threshold + 0.08 or n >= 2:
                 self.status, self.name = "known", name
-        elif self.ema < threshold - self.UNKNOWN_GAP:
-            if self.status == "known" and n < 4:
-                return  # hystérésis : un raté isolé ne fait pas basculer un propriétaire
+        elif self.ema < self.unknown_below(threshold):
+            if self.status == "known" and (n < 4 or any(x >= self.unknown_below(threshold) for x in list(self.sims)[-3:])):
+                return  # hystérésis : seuls 3 ratés consécutifs font basculer un propriétaire reconnu
             if n >= 2:
                 self.status, self.name = "unknown", None
         elif self.status == "unknown" and self.ema >= threshold - self.UNKNOWN_GAP / 2:
