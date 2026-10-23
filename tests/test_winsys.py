@@ -134,3 +134,7 @@ def test_session_lock_state_falls_back_when_wts_unknown(monkeypatch):
 
 def test_wts_session_flags_reads_current_session():
     assert winsys._wts_session_flags() == 1         # les tests tournent dans une session ouverte
+
+
+def test_product_name_is_empty_for_unknown_instance():
+    assert winsys.product_name(r"USB\VID_0000&PID_0000\INEXISTANT") == ""

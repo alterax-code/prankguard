@@ -12,9 +12,10 @@ import re
 import sys
 import threading
 import time
+import uuid
 import winreg
 from ctypes import wintypes
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from .log import get
@@ -62,6 +63,20 @@ class DEV_BROADCAST_DEVICEINTERFACE_W(ctypes.Structure):
                 ("dbcc_name", wintypes.WCHAR * 1)]
 
 
+class DEVPROPKEY(ctypes.Structure):
+    _fields_ = [("fmtid", GUID), ("pid", wintypes.ULONG)]
+
+
+def _guid(text: str) -> GUID:
+    g = GUID()
+    ctypes.memmove(ctypes.byref(g), uuid.UUID(text).bytes_le, 16)
+    return g
+
+
+# Nom annoncé par le matériel lui-même (« Razer Naga V2 HyperSpeed ») plutôt que le pilote générique
+DEVPKEY_BUS_REPORTED_DESC = DEVPROPKEY(_guid("540b947e-8b40-45bc-a8a2-6a0b894cbda2"), 4)
+
+
 class DATA_BLOB(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
 
@@ -100,6 +115,8 @@ user32.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, win
 cfgmgr32.CM_Locate_DevNodeW.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.LPCWSTR, wintypes.ULONG]
 cfgmgr32.CM_Get_Parent.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, wintypes.ULONG]
 cfgmgr32.CM_Get_Device_IDW.argtypes = [wintypes.DWORD, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
+cfgmgr32.CM_Get_DevNode_PropertyW.argtypes = [wintypes.DWORD, ctypes.POINTER(DEVPROPKEY), ctypes.POINTER(wintypes.ULONG),
+                                              ctypes.c_void_p, ctypes.POINTER(wintypes.ULONG), wintypes.ULONG]
 cfgmgr32.CM_Request_Device_EjectW.argtypes = [wintypes.DWORD, ctypes.POINTER(ctypes.c_int), wintypes.LPWSTR,
                                               wintypes.ULONG, wintypes.ULONG]
 kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
@@ -461,7 +478,9 @@ class SystemWatcher:
             items, self._burst = self._burst, []
         if items and self.on_device:
             try:
-                self.on_device(merge_burst(items))
+                dev = merge_burst(items)
+                name = product_name(dev.instance)
+                self.on_device(replace(dev, name=name) if name else dev)
             except Exception:
                 log.exception("Callback périphérique en erreur")
 
@@ -572,6 +591,21 @@ def physical_device(instance: str) -> tuple[int, str] | None:
             break
         cur = parent.value
     return node.value, _device_id(node.value).upper()
+
+
+def product_name(instance: str) -> str:
+    """Nom commercial du périphérique physique, ou "" si Windows ne le connaît pas."""
+    try:
+        found = physical_device(instance)
+    except OSError:
+        return ""
+    if not found:
+        return ""
+    ptype, buf, size = wintypes.ULONG(), ctypes.create_unicode_buffer(256), wintypes.ULONG(512)
+    if cfgmgr32.CM_Get_DevNode_PropertyW(found[0], ctypes.byref(DEVPKEY_BUS_REPORTED_DESC), ctypes.byref(ptype),
+                                         buf, ctypes.byref(size), 0) != 0:
+        return ""
+    return buf.value.strip()
 
 
 def eject_device(instance: str) -> tuple[bool, str]:
