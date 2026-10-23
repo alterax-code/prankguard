@@ -28,7 +28,7 @@ lancez directement `dist\PrankGuard\PrankGuard.exe`.
 
 ```powershell
 .\setup.bat
-.un.bat
+.\run.bat
 ```
 
 (Dans PowerShell, le préfixe `.\` est obligatoire ; dans cmd, `run.bat` suffit.)
