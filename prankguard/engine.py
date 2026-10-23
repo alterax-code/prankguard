@@ -680,6 +680,7 @@ class Engine:
                 "sim": round(float(t.ema), 3) if t.ema is not None else None,
                 "live": round(float(t.live), 2) if t.live is not None else None,
                 "screen": round(t.moire, 2),
+                "screen_raw": round(t.moire_raw, 1) if t.moire_raw is not None else None,
                 "depth": t.depth,
                 "looking": self._is_looking(t), "yaw": round(t.face.yaw, 2), "pitch": round(t.face.pitch, 2),
             })

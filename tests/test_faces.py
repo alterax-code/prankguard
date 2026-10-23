@@ -320,11 +320,11 @@ def _skin(seed=0, size=200):
     """Texture « peau » : bruit lissé, aucune périodicité."""
     rng = np.random.default_rng(seed)
     import cv2
-    g = cv2.GaussianBlur(rng.normal(128, 40, (size, size)).astype(np.float32), (0, 0), 3.0)
+    g = cv2.GaussianBlur(rng.normal(128, 40, (size, size)).astype(np.float32), (0, 0), 1.0)   # ≈ 10, comme un vrai visage
     return np.clip(np.dstack([g, g * 0.9, g * 0.8]), 0, 255).astype(np.uint8)
 
 
-def _screen(img, period=3.1, amp=40.0):
+def _screen(img, period=5.0, amp=40.0):
     """Même image refilmée sur un écran : trame périodique fine (grille de pixels / sous-pixels)."""
     h, w = img.shape[:2]
     x = np.arange(w, dtype=np.float32)
@@ -373,7 +373,8 @@ def test_parallax_survives_degenerate_points():
 
 def test_combine_liveness():
     assert F.combine_liveness(0.9, 0.0, False) == pytest.approx(0.9)
-    assert F.combine_liveness(0.9, 1.0, False) < 0.3            # trame d'écran franche
+    assert F.combine_liveness(0.9, 1.0, False) > 0.3            # seule, la trame ne condamne pas un visage jugé réel
+    assert F.combine_liveness(0.5, 1.0, False) < 0.3            # ... mais fait basculer un cas douteux
     assert F.combine_liveness(0.1, 0.0, True) == F.DEPTH_FLOOR   # relief 3D : jamais « photo »
     assert F.combine_liveness(0.1, 1.0, True) < 0.1             # ... sauf sur un écran (vidéo d'une tête qui tourne)
 
@@ -407,10 +408,10 @@ def test_depth_evidence_false_for_a_photo_waved_around():
     assert not _track_with(moves).depth_evidence()
 
 
-def test_screen_replay_becomes_spoof_even_if_the_model_is_fooled():
+def test_screen_replay_becomes_spoof_when_the_model_hesitates():
     t = new_track()
     for _ in range(4):
-        t.observe_cues(0.9, F.MOIRE_TO + 20)
+        t.observe_cues(0.5, F.MOIRE_TO + 20)
     assert t.moire == 1.0 and t.is_spoof
     t.observe_similarity("alice", 0.95, THR, 1.0)
     assert (t.status, t.name) == ("spoof", None)
@@ -418,9 +419,9 @@ def test_screen_replay_becomes_spoof_even_if_the_model_is_fooled():
 
 def test_single_moire_outlier_is_ignored():
     t = new_track()
-    t.observe_cues(0.9, 20.0)
-    t.observe_cues(0.9, F.MOIRE_TO + 50)                # reflet isolé
-    t.observe_cues(0.9, 25.0)
+    t.observe_cues(0.5, 10.0)
+    t.observe_cues(0.5, F.MOIRE_TO + 50)                # reflet isolé
+    t.observe_cues(0.5, 12.0)
     assert t.moire == 0.0 and not t.is_spoof
 
 

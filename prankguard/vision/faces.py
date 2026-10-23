@@ -195,11 +195,14 @@ class Liveness:
 
 
 # ── Indices anti-spoof complémentaires (sans modèle) ─────────────────────────
-# Calibrés sur le visage réel du propriétaire (webcam : ≤ 39), ~2 000 visages LFW très compressés
-# (≤ 111) et des recaptures d'écran simulées (≥ 126) : la pénalité ne démarre qu'au-delà du pire visage réel.
+# Mesuré à la webcam : vrai visage ≤ 15 en usage (≤ 39 en poses extrêmes) ; vrai téléphone tenu devant
+# la caméra : médiane 21, p90 45, max 77. Les deux se chevauchent : la trame n'est qu'un indice d'appoint.
+# Pénalité plafonnée à 0,5 : seule, elle ne fait JAMAIS passer un visage que MiniFASNet juge réel pour
+# une photo (sinon un intrus filmé par une webcam très compressée serait ignoré) ; elle fait basculer
+# les cas douteux (téléphone à 0,4-0,5).
 MOIRE_N = 64
-MOIRE_FROM, MOIRE_TO = 110.0, 180.0
-MOIRE_PENALTY = 0.7          # moiré franc : la probabilité « réel » est multipliée par 0,3
+MOIRE_FROM, MOIRE_TO = 40.0, 80.0
+MOIRE_PENALTY = 0.5
 MOIRE_CLEAN = 0.2            # en dessous, aucune trame d'écran
 # Parallaxe : un objet plan bougé à la main reste ≤ 0,31 ; une vraie tête qui tourne dépasse 0,35.
 PARALLAX_3D = 0.35
@@ -367,6 +370,7 @@ class Track:
     lm_hist: deque = field(default_factory=lambda: deque(maxlen=40))   # (t, 5 points) pour la parallaxe
     moires: deque = field(default_factory=lambda: deque(maxlen=3))
     moire: float = 0.0        # niveau de trame d'écran (médiane des 3 dernières mesures), 0..1
+    moire_raw: float | None = None   # dernier rapport pic/médiane brut (diagnostic)
     depth: bool = False       # relief 3D observé récemment
 
     UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
@@ -395,6 +399,7 @@ class Track:
         return False
 
     def observe_cues(self, p_fas: float, ratio: float | None) -> None:
+        self.moire_raw = ratio
         self.moires.append(moire_level(ratio))
         self.moire = float(np.median(self.moires))
         self.depth = self.depth_evidence()
