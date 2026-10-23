@@ -181,6 +181,31 @@ def test_keyboard_safety_timer_only_ends_its_own_block(monkeypatch):
     assert stopped == [1]
 
 
+WIFI = r"PCI\VEN_14C3&DEV_7925&SUBSYS_E0FF17AA&REV_00\4&633F788&0&00E4"
+
+
+@pytest.mark.parametrize("instance, removable, at_start, ignored", [
+    (WIFI, False, True, True),                          # terrain : pilote Wi-Fi réinitialisé par Windows
+    (WIFI, False, False, True),                         # carte PCIe interne, même absente au lancement
+    (r"HID\VID_048D&PID_C195&MI_00\7&1", False, True, True),   # clavier du portable
+    (r"HID\VID_048D&PID_C195&MI_00\7&1", False, False, False),  # interne mais jamais vu : on demande
+    (r"USB\VID_1532&PID_00B4\5&1", True, True, False),  # port externe : TOUJOURS une demande
+    (r"USB\VID_DEAD&PID_BEEF\1", None, False, False),   # inconnu de Windows : prudence
+])
+def test_internal_reappearance(monkeypatch, instance, removable, at_start, ignored):
+    monkeypatch.setattr(winsys, "is_removable", lambda i: removable)
+    sw = winsys.SystemWatcher()
+    sw._present_at_start = {instance.upper()} if at_start else set()
+    assert sw._internal_reappearance(instance) is ignored
+
+
+def test_present_instances_and_removable_on_this_machine():
+    ids = winsys.present_instances()
+    assert len(ids) > 20 and all(i == i.upper() for i in ids)
+    assert any(i.startswith("ROOT\\") or i.startswith("ACPI\\") for i in ids)
+    assert winsys.is_removable(r"USB\VID_0000&PID_0000\INEXISTANT") is None
+
+
 def test_single_instance_can_be_reacquired_after_owner_exits():
     import ctypes
     name = r"Local\PrankGuard.test.%d" % id(object())

@@ -117,6 +117,10 @@ cfgmgr32.CM_Get_Parent.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWOR
 cfgmgr32.CM_Get_Device_IDW.argtypes = [wintypes.DWORD, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
 cfgmgr32.CM_Get_DevNode_PropertyW.argtypes = [wintypes.DWORD, ctypes.POINTER(DEVPROPKEY), ctypes.POINTER(wintypes.ULONG),
                                               ctypes.c_void_p, ctypes.POINTER(wintypes.ULONG), wintypes.ULONG]
+cfgmgr32.CM_Get_DevNode_Status.argtypes = [ctypes.POINTER(wintypes.ULONG), ctypes.POINTER(wintypes.ULONG),
+                                           wintypes.DWORD, wintypes.ULONG]
+cfgmgr32.CM_Get_Device_ID_List_SizeW.argtypes = [ctypes.POINTER(wintypes.ULONG), wintypes.LPCWSTR, wintypes.ULONG]
+cfgmgr32.CM_Get_Device_ID_ListW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
 cfgmgr32.CM_Request_Device_EjectW.argtypes = [wintypes.DWORD, ctypes.POINTER(ctypes.c_int), wintypes.LPWSTR,
                                               wintypes.ULONG, wintypes.ULONG]
 kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
@@ -392,8 +396,13 @@ class SystemWatcher:
         self._burst_started = 0.0
         self._burst_timer: threading.Timer | None = None
         self._wndproc = WNDPROC(self._proc)   # référence conservée (sinon GC -> crash)
+        self._present_at_start: set[str] = set()
 
     def start(self) -> None:
+        try:
+            self._present_at_start = present_instances()
+        except OSError:
+            self._present_at_start = set()
         self._thread = threading.Thread(target=self._run, name="SystemWatcher", daemon=True)
         self._thread.start()
         self._ready.wait(3)
@@ -484,7 +493,7 @@ class SystemWatcher:
         name_off = DEV_BROADCAST_DEVICEINTERFACE_W.dbcc_name.offset
         path = ctypes.wstring_at(lparam + name_off)
         dev = classify(str(dbi.dbcc_classguid), path)
-        if dev is None:
+        if dev is None or self._internal_reappearance(dev.instance):
             return
         with self._burst_lock:
             first = not self._burst
@@ -503,6 +512,21 @@ class SystemWatcher:
                 self.on_device_early(dev)
             except Exception:
                 log.exception("Callback périphérique (précoce) en erreur")
+
+    def _internal_reappearance(self, instance: str) -> bool:
+        """Composant interne qui réapparaît (pilote réinitialisé par Windows, ex. carte Wi-Fi après une
+        coupure) : ce n'est pas un branchement. Un port externe déclenche toujours, même au même endroit :
+        une clé piégée qui copie l'identité d'un clavier rebranché au même port aurait le même identifiant."""
+        try:
+            if is_removable(instance) is not False:
+                return False
+        except OSError:
+            return False
+        inst = instance.upper()
+        if inst in self._present_at_start or inst.startswith("PCI\\"):
+            log.info("Réapparition d'un composant interne ignorée (pilote réinitialisé) : %s", instance)
+            return True
+        return False
 
     def _flush_burst(self) -> None:
         with self._burst_lock:
@@ -617,6 +641,39 @@ def _device_id(devinst: int) -> str:
     if cfgmgr32.CM_Get_Device_IDW(devinst, buf, len(buf), 0) != 0:
         return ""
     return buf.value
+
+
+DN_REMOVABLE = 0x00004000
+CM_GETIDLIST_FILTER_PRESENT = 0x00000100
+
+
+def present_instances() -> set[str]:
+    """Identifiants de tous les périphériques présents (en majuscules)."""
+    size = wintypes.ULONG()
+    if cfgmgr32.CM_Get_Device_ID_List_SizeW(ctypes.byref(size), None, CM_GETIDLIST_FILTER_PRESENT) != 0:
+        return set()
+    buf = ctypes.create_unicode_buffer(size.value + 1)
+    if cfgmgr32.CM_Get_Device_ID_ListW(None, buf, len(buf), CM_GETIDLIST_FILTER_PRESENT) != 0:
+        return set()
+    return {i.upper() for i in ctypes.wstring_at(buf, len(buf)).split("\x00") if i}
+
+
+def is_removable(instance: str) -> bool | None:
+    """Vrai si le périphérique ou un de ses parents est sur un emplacement amovible (port USB externe,
+    Thunderbolt…). Faux pour un composant interne (carte Wi-Fi PCIe, clavier du portable). None si inconnu."""
+    node = wintypes.DWORD()
+    if cfgmgr32.CM_Locate_DevNodeW(ctypes.byref(node), instance, 0) != 0:
+        return None
+    cur = node.value
+    for _ in range(16):
+        status, problem = wintypes.ULONG(), wintypes.ULONG()
+        if cfgmgr32.CM_Get_DevNode_Status(ctypes.byref(status), ctypes.byref(problem), cur, 0) == 0                 and status.value & DN_REMOVABLE:
+            return True
+        parent = wintypes.DWORD()
+        if cfgmgr32.CM_Get_Parent(ctypes.byref(parent), cur, 0) != 0:
+            break
+        cur = parent.value
+    return False
 
 
 def physical_device(instance: str) -> tuple[int, str] | None:
