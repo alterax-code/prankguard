@@ -332,6 +332,9 @@ select:focus, .input:focus { border-color: rgba(var(--accent-rgb), .6); box-shad
 .enroll-view img { position: absolute; inset: 0; width: 256px; height: 256px; object-fit: cover; transform: scaleX(-1); transition: transform .35s var(--ease), opacity .4s; opacity: 0; }
 .enroll-view img.on { opacity: 1; }
 .enroll-ring { position: absolute; inset: 0; width: 300px; height: 300px; }
+.pose-gauge { width: 220px; height: 6px; margin: -4px auto 12px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.pose-gauge span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--blue); transition: width .15s linear, background .2s; }
+.pose-gauge.ok span { background: var(--green); }
 .enroll-ring .seg-bg { stroke: var(--surface-3); }
 .enroll-ring .seg-fg { stroke: var(--green); transition: stroke-dashoffset .3s var(--ease); }
 .enroll-ring .seg-active { stroke: var(--blue); }

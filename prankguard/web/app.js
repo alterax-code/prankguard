@@ -484,6 +484,12 @@ function renderEnroll(p) {
   if (!enrollActive) return;
   zoomOnFace($("#enrollImg"), (S.state.faces || [])[0], 256);
   $("#enrollHint").textContent = p.hint;
+  const gauge = $("#poseGauge");
+  gauge.hidden = p.gauge == null;
+  if (p.gauge != null) {
+    gauge.firstElementChild.style.width = `${Math.round(p.gauge * 100)}%`;
+    gauge.classList.toggle("ok", p.gauge >= 1);
+  }
   for (const [k] of POSES) {
     const done = Math.min(p.counts[k], p.targets[k]), frac = done / p.targets[k];
     const arc = $(`.seg-fg[data-pose="${k}"]`);

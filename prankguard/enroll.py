@@ -19,18 +19,38 @@ CAPTURE_INTERVAL = 0.22
 CALIB_FRAMES = 8
 
 
-def pose_bucket(yaw: float, pitch: float) -> str | None:
-    if abs(yaw) < 0.16 and abs(pitch) < 0.22:
-        return "center"
-    if 0.28 <= yaw <= 0.85 and abs(pitch) < 0.45:
-        return "left"
-    if -0.85 <= yaw <= -0.28 and abs(pitch) < 0.45:
-        return "right"
-    if abs(yaw) < 0.3 and pitch <= -0.25:
+# Seuils de pose relatifs à la pose naturelle. Le tangage (haut/bas) se lit sur la position
+# verticale du nez entre yeux et bouche : il varie peu (~0,9 par radian), d'où un seuil bas
+# (~9°) — avec 0,25 il fallait ~16° et l'utilisateur « galérait » sur haut/bas.
+YAW_SIDE = 0.28
+PITCH_UPDOWN = 0.14
+
+
+def pose_bucket(yaw: float, pitch: float, prefer: str | None = None) -> str | None:
+    """Pose atteinte. `prefer` = pose demandée : une tête un peu tournée ET levée compte pour « haut »
+    quand c'est « haut » qui est demandé (sinon elle tomberait dans « gauche »)."""
+    if prefer == "up" and abs(yaw) < 0.35 and pitch <= -PITCH_UPDOWN:
         return "up"
-    if abs(yaw) < 0.3 and pitch >= 0.28:
+    if prefer == "down" and abs(yaw) < 0.35 and pitch >= PITCH_UPDOWN:
+        return "down"
+    if abs(yaw) < 0.16 and abs(pitch) < 0.11:
+        return "center"
+    if YAW_SIDE <= yaw <= 0.85 and abs(pitch) < 0.45:
+        return "left"
+    if -0.85 <= yaw <= -YAW_SIDE and abs(pitch) < 0.45:
+        return "right"
+    if abs(yaw) < 0.35 and pitch <= -PITCH_UPDOWN:
+        return "up"
+    if abs(yaw) < 0.35 and pitch >= PITCH_UPDOWN:
         return "down"
     return None
+
+
+def pose_gauge(target: str | None, yaw: float, pitch: float) -> float | None:
+    """Avancement 0..1 vers la pose demandée (jauge affichée sous la consigne)."""
+    reach = {"left": yaw / YAW_SIDE, "right": -yaw / YAW_SIDE,
+             "up": -pitch / PITCH_UPDOWN, "down": pitch / PITCH_UPDOWN}.get(target or "")
+    return None if reach is None else max(0.0, min(1.0, reach))
 
 
 @dataclass
@@ -44,6 +64,7 @@ class EnrollSession:
     last_capture: float = 0.0
     hint: str = "Placez votre visage dans le cercle"
     current_pose: str | None = None
+    rel: tuple | None = None          # pose relative courante (yaw, pitch)
     done: bool = False
     base_yaw: float | None = None
     base_pitch: float = 0.0
@@ -71,11 +92,13 @@ class EnrollSession:
         return {"name": self.name, "counts": self.counts, "targets": TARGETS, "total": self.total,
                 "target_total": self.target_total, "hint": self.hint, "pose": self.current_pose,
                 "next": self.next_target(), "can_finish": self.total >= MIN_SAMPLES, "complete": self.complete,
-                "calibrated": self.base_yaw is not None}
+                "calibrated": self.base_yaw is not None,
+                "gauge": pose_gauge(self.next_target(), *self.rel) if self.rel else None}
 
     def feed(self, engine: FaceEngine, frame: np.ndarray, faces: list[Face], now: float) -> bool:
         """Traite une image ; retourne True si un échantillon a été capturé."""
         self.current_pose = None
+        self.rel = None
         if not faces:
             self.hint = "Aucun visage détecté — placez-vous face à la caméra"
             return False
@@ -102,7 +125,8 @@ class EnrollSession:
                     self._calib = self._calib[-CALIB_FRAMES // 2:]
                     self.hint = "Restez immobile un instant…"
             return False
-        bucket = pose_bucket(f.yaw - self.base_yaw, f.pitch - self.base_pitch)
+        self.rel = (f.yaw - self.base_yaw, f.pitch - self.base_pitch)
+        bucket = pose_bucket(*self.rel, prefer=self.next_target())
         self.current_pose = bucket
         target = self.next_target()
         if target is None:
@@ -149,6 +173,6 @@ _HINTS = {
     "center": "Regardez droit vers la caméra",
     "left": "Tournez doucement la tête vers votre gauche",
     "right": "Tournez doucement la tête vers votre droite",
-    "up": "Levez légèrement le menton",
-    "down": "Baissez légèrement le menton",
+    "up": "Levez un peu le menton, comme pour regarder le haut de l'écran",
+    "down": "Baissez un peu le menton, comme pour regarder votre clavier",
 }

@@ -8,14 +8,14 @@ from prankguard.vision.faces import Face
 
 
 @pytest.mark.parametrize("yaw,pitch,expected", [
-    (0.0, 0.0, "center"), (0.1, -0.1, "center"), (-0.15, 0.2, "center"),
+    (0.0, 0.0, "center"), (0.1, -0.1, "center"), (-0.15, 0.08, "center"),
     (0.5, 0.0, "left"), (0.28, 0.4, "left"), (0.85, 0.0, "left"),
     (-0.5, 0.0, "right"), (-0.28, -0.4, "right"), (-0.85, 0.0, "right"),
-    (0.0, -0.3, "up"), (0.1, -0.6, "up"),
-    (0.0, 0.3, "down"), (-0.1, 0.8, "down"),
+    (0.0, -0.3, "up"), (0.1, -0.6, "up"), (0.0, -0.15, "up"), (0.25, -0.2, "up"),
+    (0.0, 0.3, "down"), (-0.1, 0.8, "down"), (0.0, 0.15, "down"), (-0.25, 0.2, "down"),
     (0.95, 0.0, None),          # profil trop marqué
     (0.2, 0.0, None),           # entre centre et gauche
-    (0.0, -0.23, None),         # entre centre et haut
+    (0.0, -0.12, None),         # entre centre et haut
     (0.5, 0.6, None),           # tourné ET penché
 ])
 def test_pose_bucket(yaw, pitch, expected):
@@ -199,3 +199,21 @@ def test_feed_rejects_blurry_crop():
     eng.crop = np.full((112, 112, 3), 100, np.uint8)            # uniforme -> netteté nulle
     assert s.feed(eng, FRAME, [face()], 5.0) is False
     assert s.total == 0 and "flou" in s.hint.lower()
+
+
+@pytest.mark.parametrize("target,yaw,pitch,expected", [
+    ("up", 0.0, -0.07, 0.5), ("up", 0.0, -0.3, 1.0), ("up", 0.0, 0.1, 0.0),
+    ("down", 0.0, 0.14, 1.0), ("left", 0.14, 0.0, 0.5), ("right", 0.14, 0.0, 0.0),
+    ("center", 0.0, 0.0, None), (None, 0.0, 0.0, None),
+])
+def test_pose_gauge(target, yaw, pitch, expected):
+    from prankguard.enroll import pose_gauge
+    g = pose_gauge(target, yaw, pitch)
+    assert g == (pytest.approx(expected) if expected is not None else None)
+
+
+def test_requested_up_down_wins_over_side_when_ambiguous():
+    assert pose_bucket(0.3, -0.2) == "left"
+    assert pose_bucket(0.3, -0.2, prefer="up") == "up"
+    assert pose_bucket(-0.3, 0.2, prefer="down") == "down"
+    assert pose_bucket(0.3, -0.05, prefer="up") == "left"     # pas assez levé : reste « gauche »

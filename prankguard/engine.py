@@ -41,6 +41,7 @@ LEARN_INTERVAL = 45.0        # au plus un échantillon appris toutes les 45 s
 LEARN_ANCHOR_MARGIN = 0.04   # similarité à l'ENRÔLEMENT ≥ seuil + marge (pas aux échantillons appris)
 LEARN_MIN_LIVE = 0.85        # anti-spoofing nettement « réel »
 LEARN_NOVELTY = 0.90         # inutile d'apprendre une vue quasi identique à une vue déjà connue
+LEARN_IF_BELOW = 0.70        # vue déjà très bien reconnue : rien à apprendre (on garde la place)
 
 PROMPT_SHOW_GRACE = 3.0      # temps laissé à la fenêtre de décision pour s'afficher avant le décompte
 
@@ -334,6 +335,8 @@ class Engine:
             return False
         anchor_name, anchor_sim = self.anchor.best(emb)
         if anchor_name != t.name or anchor_sim < s.match_threshold + LEARN_ANCHOR_MARGIN:
+            return False
+        if self.matcher.best(emb)[1] >= LEARN_IF_BELOW:
             return False
         known = self.gallery.embeddings().get(t.name)
         if known is None or (len(known) and float((known @ emb).max()) >= LEARN_NOVELTY):

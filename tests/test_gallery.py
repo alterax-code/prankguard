@@ -138,7 +138,8 @@ def test_adaptive_samples_roundtrip_and_fifo(path, encrypt, monkeypatch):
     for e in extra:
         g.add_adaptive("alice", e)
     g2 = Gallery(path, encrypt=encrypt)
-    assert np.allclose(g2.people["alice"]["adapt"], extra[-3:])        # FIFO borné
+    assert len(g2.people["alice"]["adapt"]) == 3                       # borné
+    assert np.allclose(g2.people["alice"]["adapt"][-1], extra[-1])     # la nouvelle vue est toujours gardée
     assert len(g2.embeddings()["alice"]) == 8 and len(g2.enrolled()["alice"]) == 5
     assert g2.summary()[0]["learned"] == 3
 
@@ -168,3 +169,17 @@ def test_legacy_file_without_adaptive_loads(path, encrypt):
     path.write_bytes(gal._MAGIC + (winsys.dpapi_protect(raw) if encrypt else raw))
     g2 = Gallery(path, encrypt=encrypt)
     assert g2.summary()[0]["learned"] == 0 and len(g2.embeddings()["alice"]) == 5
+
+
+def test_full_learning_drops_most_redundant_view(path, monkeypatch):
+    import prankguard.gallery as gal
+    monkeypatch.setattr(gal, "MAX_ADAPTIVE", 3)
+    g = Gallery(path, encrypt=False)
+    g.upsert("alice", embs(1, 5), THUMB)
+    e = np.eye(128, dtype=np.float32)
+    twin = (e[0] + 0.05 * e[9]) / np.linalg.norm(e[0] + 0.05 * e[9])
+    for v in (e[0], e[1], twin, e[2]):          # e[0] et son quasi-jumeau : l'un des deux part
+        g.add_adaptive("alice", v)
+    kept = g.people["alice"]["adapt"]
+    assert len(kept) == 3
+    assert any(np.allclose(k, e[1]) for k in kept) and np.allclose(kept[-1], e[2])

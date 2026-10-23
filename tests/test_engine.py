@@ -291,11 +291,11 @@ def learner(eng, monkeypatch):
 
 
 def test_learns_a_new_safe_view_once_per_interval(eng, learner):
-    emb = _unit((0, .8), (5, .6))                  # même personne, autre éclairage : sim d'ancrage 0,8
+    emb = _unit((0, .6), (5, .8))                  # même personne, autre éclairage : sim d'ancrage 0,6
     assert eng._maybe_learn(learner, emb, 1000.0)
     assert eng.gallery.summary()[0]["learned"] == 1
-    assert not eng._maybe_learn(learner, _unit((0, .8), (6, .6)), 1010.0)   # trop tôt
-    assert eng._maybe_learn(learner, _unit((0, .8), (6, .6)), 1000.0 + E.LEARN_INTERVAL)
+    assert not eng._maybe_learn(learner, _unit((0, .6), (6, .8)), 1010.0)   # trop tôt
+    assert eng._maybe_learn(learner, _unit((0, .6), (6, .8)), 1000.0 + E.LEARN_INTERVAL)
 
 
 def test_does_not_learn_redundant_view(eng, learner):
@@ -365,3 +365,9 @@ def test_prompt_countdown_starts_after_window_is_shown(eng, ask, monkeypatch):
     eng.on_device_prompt = slow_window
     eng._on_device(_dev("hid"))
     assert eng.snapshot()["device_prompt"]["left"] >= eng.config.s.device_prompt_timeout - 0.1
+
+
+def test_does_not_learn_a_view_already_well_recognised(eng, learner):
+    eng.gallery.add_adaptive("alice", _unit((0, .8), (5, .6)))
+    eng.reload_gallery()
+    assert not eng._maybe_learn(learner, _unit((0, .8), (5, .6), (8, .05)), 1000.0)

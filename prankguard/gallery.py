@@ -19,7 +19,7 @@ from .log import get
 
 log = get("gallery")
 _MAGIC = b"PGv3"
-MAX_ADAPTIVE = 40          # échantillons appris par profil (les plus anciens sont remplacés)
+MAX_ADAPTIVE = 40          # échantillons appris par profil (au-delà, le plus redondant est remplacé)
 
 
 class Gallery:
@@ -96,7 +96,14 @@ class Gallery:
             p = self.people.get(name)
             if p is None:
                 return False
-            p["adapt"] = np.vstack([p["adapt"], np.asarray(emb, np.float32)[None]])[-MAX_ADAPTIVE:]
+            adapt = np.vstack([p["adapt"], np.asarray(emb, np.float32)[None]])
+            if len(adapt) > MAX_ADAPTIVE:
+                # garder la diversité (jour / soir, lunettes…) : on retire la vue la plus redondante,
+                # jamais la nouvelle
+                sims = adapt[:-1] @ adapt.T
+                np.fill_diagonal(sims[:, :-1], -1.0)
+                adapt = np.delete(adapt, int(sims.max(axis=1).argmax()), axis=0)
+            p["adapt"] = adapt
             self.save()
             return True
 
