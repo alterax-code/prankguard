@@ -60,6 +60,7 @@ class Guard:
         self._arming_until = 0.0
         self._started = False
         self._start_ref = 0.0
+        self._camera_ever_ok = False   # au lancement, une caméra qui n'a jamais répondu ne verrouille pas
         self._last_lock_camera = False
         self._cam_waived = False
         self._reset_timers()
@@ -129,7 +130,10 @@ class Guard:
                 return Verdict(STARTING)
             if self._cam_lost_since is None:
                 self._cam_lost_since = now
-            if s.lock_on_camera_lost and self.enrolled and not self._cam_waived and now >= self._arming_until:
+            # Terrain : caméra encore bloquée par le processus précédent -> ouverture > 36 s au lancement,
+            # et l'utilisateur se faisait verrouiller par l'app qu'il venait de démarrer.
+            if (s.lock_on_camera_lost and self.enrolled and self._camera_ever_ok and not self._cam_waived
+                    and now >= self._arming_until):
                 left = s.camera_lost_delay - (now - self._cam_lost_since)
                 if left <= 0:
                     self._last_lock_camera = True
@@ -137,6 +141,7 @@ class Guard:
                 return Verdict(CAMERA_LOST, countdown=left)
             return Verdict(CAMERA_LOST)
         self._started = True
+        self._camera_ever_ok = True
         self._cam_lost_since = None
         self._cam_waived = False
 

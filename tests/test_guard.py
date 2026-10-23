@@ -39,7 +39,19 @@ def test_starting_then_camera_lost_after_grace():
     assert g.step(obs(100.0 + G.STARTUP_GRACE - 0.1, cam=False)).state == G.STARTING
     v = g.step(obs(100.0 + G.STARTUP_GRACE + 0.5, cam=False))
     assert v.state == G.CAMERA_LOST and v.action is None
-    assert v.countdown == pytest.approx(g.s.camera_lost_delay)
+
+
+def test_camera_that_never_answered_since_launch_does_not_lock():
+    """Terrain : au lancement, caméra encore tenue par l'ancien processus (> 36 s) -> PrankGuard
+    verrouillait la session de celui qui venait de le démarrer."""
+    g = Guard(Settings(lock_on_camera_lost=True, camera_lost_delay=6, rearm_delay=0.0))
+    g.arm(0.0)
+    for t in (5.0, 31.0, 40.0, 120.0):
+        v = g.step(Observation(t, False, camera_opening=t < 35))
+        assert v.action is None and v.countdown is None
+    assert g.step(obs(121.0)).state != G.CAMERA_LOST     # elle finit par répondre
+    g.step(obs(122.0, cam=False))
+    assert g.step(obs(128.5, cam=False)).action == "lock"   # désormais, la perdre verrouille
 
 
 def test_camera_lost_locks_after_delay():
