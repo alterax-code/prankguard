@@ -58,7 +58,7 @@ class Guard:
         self._started = False
         self._start_ref = 0.0
         self._reset_timers()
-        self.owner_last_seen = 0.0
+        self.owner_last_seen = float("-inf")
         self.owner_name: str | None = None
         self._absence_ref = 0.0
 

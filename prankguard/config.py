@@ -123,6 +123,8 @@ class ConfigStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return s
+        if not isinstance(data, dict):
+            return s
         for k, v in data.items():
             if k in _FIELDS:
                 try:

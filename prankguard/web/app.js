@@ -478,7 +478,7 @@ function renderEnroll(p) {
 }
 
 // ── Réglages ────────────────────────────────────────────────────────────────
-const deg = v => `±${Math.round(Math.atan(v / 2 * 1.15) * 180 / Math.PI)}°`;
+const deg = v => `±${Math.round(v * 55)}°`;  // yaw normalisé ≈ 0.18 par 10°
 const SCHEMA = [
   { title: "Verrouillage", icon: "i-lock", rows: [
     { k: "lock_on_stranger", type: "toggle", label: "Inconnu devant l'écran", desc: "Verrouille quand un visage non autorisé regarde l'écran en votre absence." },

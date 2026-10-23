@@ -249,7 +249,7 @@ def _make_handler(srv: Server):
 
         def _authed(self, q) -> bool:
             tok = self.headers.get("X-PG-Token") or q.get("t", [""])[0]
-            return secrets.compare_digest(tok, srv.token)
+            return secrets.compare_digest(tok.encode("utf-8", "surrogateescape"), srv.token.encode())
 
         def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None):
             self.send_response(code)
@@ -305,11 +305,14 @@ def _make_handler(srv: Server):
             fn = routes_post.get(u.path)
             if not fn:
                 return self._send(404, b"", "text/plain")
-            n = int(self.headers.get("Content-Length") or 0)
             try:
-                body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n > 0 else {}
                 if not isinstance(body, dict):
                     body = {}
+            except ValueError:
+                return self._json({"error": "requête invalide"}, 400)
+            try:
                 return self._json(fn(self, body))
             except Exception as e:
                 log.exception("POST %s", u.path)
