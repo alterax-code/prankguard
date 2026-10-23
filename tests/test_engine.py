@@ -96,3 +96,54 @@ def test_looking_face_is_always_analysed(eng, monkeypatch):
         eng._analyze(frame, t + i * 0.3)
     assert eng._tracks and eng._tracks[0].status == "unknown"
     assert eng._verdict.state in (G.ALERT, G.ARMING)
+
+
+# ── Branchements de périphériques ────────────────────────────────────────────
+
+def _dev(category, key="1532:00B4", name="Razer"):
+    return winsys.DeviceArrival(category=category, name=name, key=key, instance=r"USB\X")
+
+
+@pytest.fixture
+def locks(eng, monkeypatch):
+    calls = []
+    monkeypatch.setattr(winsys, "lock_workstation", lambda: calls.append(1) or True)
+    monkeypatch.setattr(eng.camera, "pause", lambda: None)
+    monkeypatch.setattr(eng.camera, "resume", lambda: None)
+    eng.config.update({"device_action": "lock"})
+    eng._quiet_devices_until = 0.0
+    return calls
+
+
+def test_device_locks_right_after_session_unlock(eng, locks):
+    """Bug terrain : un branchement juste après un déverrouillage était ignoré (« réveil »)."""
+    eng._on_session("lock")
+    eng._on_session("unlock")
+    eng._on_device(_dev("hid"))
+    assert locks == [1]
+
+
+@pytest.mark.parametrize("category", ["storage", "keyboard", "mouse", "hid", "usb", "phone"])
+def test_wake_window_never_ignores_risky_devices(eng, locks, category):
+    eng._on_power("resume")
+    eng._on_device(_dev(category))
+    assert locks == [1]
+
+
+@pytest.mark.parametrize("category", ["display", "audio", "network", "bluetooth"])
+def test_wake_window_tolerates_self_reenumerating_devices(eng, locks, category):
+    eng._on_power("resume")
+    eng._on_device(_dev(category))
+    assert locks == []
+
+
+def test_trusted_device_never_locks(eng, locks):
+    eng.config.update({"trusted_devices": ["1532:00B4"]})
+    eng._on_device(_dev("mouse"))
+    assert locks == []
+
+
+def test_manual_lock_is_ignored_when_already_locked(eng, locks):
+    eng.lock_now()
+    eng.lock_now()
+    assert locks == [1]

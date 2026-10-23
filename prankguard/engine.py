@@ -28,7 +28,10 @@ REVERIFY_KNOWN = 0.7         # ré-identification périodique d'un visage reconn
 REVERIFY_OTHER = 0.25        # identification rapide des visages inconnus / en attente
 MAX_EMBEDS_PER_FRAME = 3
 DARK_LEVEL = 10              # luminosité moyenne en dessous de laquelle la caméra est considérée masquée
-DEVICE_QUIET_AFTER_WAKE = 12.0
+DEVICE_QUIET_AFTER_WAKE = 10.0   # après une sortie de veille uniquement (jamais après un déverrouillage)
+# Catégories qui se ré-énumèrent d'elles-mêmes au réveil : seules celles-ci sont tolérées pendant
+# la fenêtre de réveil. Stockage, clavier, souris, HID, téléphone… déclenchent toujours.
+WAKE_TOLERATED = {"display", "audio", "network", "bluetooth", "camera", "other"}
 ENROLL_TIMEOUT = 120.0       # un enrôlement abandonné ne doit jamais laisser la protection coupée
 LOCK_CONFIRM_DELAY = 2.5     # après LockWorkStation, délai avant de vérifier l'état réel de la session
 
@@ -65,6 +68,7 @@ class Engine:
         self._lock_check_after = 0.0
         self._next_session_poll = 0.0
         self._reset_tracks = False    # demandé par d'autres threads, appliqué dans le thread moteur
+        self._dry_timer: threading.Timer | None = None
         self.metrics = {"analysis_ms": 0.0, "analysis_fps": 0.0, "camera_fps": 0.0, "embeds_per_s": 0.0}
         self._version = 0
 
@@ -120,6 +124,8 @@ class Engine:
         self._publish(force=True)
 
     def lock_now(self, reason: str = "Verrouillage manuel") -> None:
+        if self.guard.locked:
+            return
         self._do_lock(reason, None, manual=True)
 
     def reload_gallery(self) -> None:
@@ -317,9 +323,11 @@ class Engine:
             # simulation : verrouillage puis déverrouillage automatique, la session réelle n'est pas touchée
             log.warning("DRY-RUN : LockWorkStation non appelé")
             self._on_session("lock")
-            t = threading.Timer(4.0, self._on_session, args=("unlock",))
-            t.daemon = True
-            t.start()
+            if self._dry_timer:
+                self._dry_timer.cancel()
+            self._dry_timer = threading.Timer(4.0, self._on_session, args=("unlock",))
+            self._dry_timer.daemon = True
+            self._dry_timer.start()
         else:
             with self._lock:
                 self.guard.on_session_locked()
@@ -351,7 +359,6 @@ class Engine:
                 self.camera.pause()
             log.info("Session verrouillée — caméra libérée")
         else:
-            self._quiet_devices_until = now + DEVICE_QUIET_AFTER_WAKE
             self.alarm.stop()
             with self._lock:
                 self.guard.on_session_unlocked(now)
@@ -382,7 +389,7 @@ class Engine:
         if dev.key in s.trusted_devices:
             log.info("Périphérique approuvé : %s (%s)", label, dev.key)
             return
-        if now < self._quiet_devices_until:
+        if now < self._quiet_devices_until and dev.category in WAKE_TOLERATED:
             self.events.add("device", "info", f"Branché : {label}", detail + " · (réveil, ignoré)")
             return
         with self._lock:
