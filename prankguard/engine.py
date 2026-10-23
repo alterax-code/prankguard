@@ -42,6 +42,8 @@ LEARN_ANCHOR_MARGIN = 0.04   # similarité à l'ENRÔLEMENT ≥ seuil + marge (p
 LEARN_MIN_LIVE = 0.85        # anti-spoofing nettement « réel »
 LEARN_NOVELTY = 0.90         # inutile d'apprendre une vue quasi identique à une vue déjà connue
 
+PROMPT_SHOW_GRACE = 3.0      # temps laissé à la fenêtre de décision pour s'afficher avant le décompte
+
 _prompt_ids = itertools.count(1)
 
 
@@ -96,6 +98,7 @@ class Engine:
         self._reset_tracks = False    # demandé par d'autres threads, appliqué dans le thread moteur
         self._dry_timer: threading.Timer | None = None
         self._prompt: DevicePrompt | None = None
+        self._dev_lock = threading.RLock()
         self._prompt_timer: threading.Timer | None = None
         self.metrics = {"analysis_ms": 0.0, "analysis_fps": 0.0, "camera_fps": 0.0, "embeds_per_s": 0.0}
         self._version = 0
@@ -393,7 +396,10 @@ class Engine:
             if winsys.lock_workstation():
                 log.info("LockWorkStation appelé (équivalent Win+L)")
             else:
+                # session NON verrouillée : on ne reste pas « aveugle » en croyant l'être
                 log.error("LockWorkStation a échoué")
+                with self._lock:
+                    self.guard.locked = False
         # 2) puis journaliser / alerter, au mieux
         try:
             self.events.add("lock", "info" if manual else "critical", reason,
@@ -443,84 +449,118 @@ class Engine:
             if not winsys.is_session_locked():
                 self.camera.resume()
 
-    def _device_filter(self, dev: winsys.DeviceArrival, now: float) -> str | None:
-        """Raison d'ignorer un branchement (approuvé, réveil, famille non surveillée), sinon None."""
+    def _device_filter(self, dev: winsys.DeviceArrival, now: float, early: bool = False) -> str | None:
+        """Raison d'ignorer un branchement (approuvé, réveil, famille non surveillée), sinon None.
+
+        En précoce, la famille n'est pas encore sûre (la 1re interface d'une rafale n'est pas
+        forcément la plus parlante) : on bloque le clavier quand même, la fusion tranchera.
+        """
         s = self.config.s
         if dev.key in s.trusted_devices:
             return "approuvé"
         if now < self._quiet_devices_until and dev.category in WAKE_TOLERATED:
             return "réveil, ignoré"
-        if dev.category not in s.device_categories:
+        if not early and dev.category not in s.device_categories:
             return "famille non surveillée"
         return None
 
     def _on_device_early(self, dev: winsys.DeviceArrival) -> None:
-        """Première interface d'un branchement : bloque le clavier tout de suite si une décision suivra."""
+        """Première interface d'un branchement : bloque le clavier tout de suite si une décision peut suivre."""
         now = time.time()
-        if self._device_filter(dev, now):
+        if self._device_filter(dev, now, early=True):
             return
         with self._lock:
             policy = self.guard.device_policy(now)
         if policy in ("ask", "lock"):
             self.keyboard.start()
 
+    def _journal(self, *args) -> None:
+        try:
+            self.events.add(*args)
+        except Exception:
+            log.exception("Journal indisponible")
+
     def _on_device(self, dev: winsys.DeviceArrival) -> None:
+        # Tout le traitement des branchements est sérialisé : une seule question à la fois, et une
+        # réponse ne peut pas croiser un nouveau branchement ni l'expiration du délai.
+        with self._dev_lock:
+            try:
+                self._handle_device(dev)
+            except Exception:
+                log.exception("Traitement du branchement en erreur")
+            finally:
+                if self._prompt is None:
+                    self.keyboard.stop()
+        self._publish(force=True)
+
+    def _handle_device(self, dev: winsys.DeviceArrival) -> None:
         now = time.time()
         s = self.config.s
         label = f"{dev.name}" if dev.name else dev.category
         detail = f"{dev.category} · {dev.key}"
         skip = self._device_filter(dev, now)
         if skip:
-            if self._prompt is None:
-                self.keyboard.stop()
             if skip == "approuvé":
                 log.info("Périphérique approuvé : %s (%s)", label, dev.key)
             else:
-                self.events.add("device", "info", f"Branché : {label}", f"{detail} · ({skip})")
+                self._journal("device", "info", f"Branché : {label}", f"{detail} · ({skip})")
             return
         with self._lock:
             policy = self.guard.device_policy(now)
-            pending = self._prompt
-            if policy == "ask" and pending is not None:
-                pending.devices.append(dev)      # même décision pour tout ce qui est branché pendant la question
+        pending = self._prompt
         if policy == "lock":
-            self.events.add("device", "critical", f"Branché : {label}", detail)
             if pending is not None:
                 pending.devices.append(dev)
                 self._resolve_prompt(pending.id, "deny", f"Périphérique branché : {label}")
             else:
-                self._eject([dev])
-                self._do_lock(f"Périphérique branché : {label}", None)
-                self.keyboard.stop()
+                self._deny([dev], f"Périphérique branché : {label}", f"Branché : {label}", detail)
         elif policy == "ask":
-            self.events.add("device", "warning", f"Branché : {label}", f"{detail} · en attente de votre décision")
-            if pending is None:
-                self._open_prompt(dev, now)
+            self._journal("device", "warning", f"Branché : {label}", f"{detail} · en attente de votre décision")
+            if pending is not None:
+                pending.devices.append(dev)      # même décision pour tout ce qui est branché pendant la question
+            else:
+                self._open_prompt(dev)
         else:
-            if self._prompt is None:
-                self.keyboard.stop()
-            self.events.add("device", "warning" if policy == "notify" else "info", f"Branché : {label}", detail)
+            self._journal("device", "warning" if policy == "notify" else "info", f"Branché : {label}", detail)
             if policy == "notify" and s.notifications:
                 self.notify("Nouveau périphérique", label)
-        self._publish(force=True)
+
+    def _deny(self, devices: list, lock_reason: str | None, title: str, detail: str) -> None:
+        """Refus : verrouiller D'ABORD (rien ne doit pouvoir le retarder), puis éjecter et journaliser."""
+        if lock_reason:
+            try:
+                self._do_lock(lock_reason, None)
+            except Exception:
+                log.exception("Verrouillage impossible")
+        self._eject(devices)
+        self._journal("device", "critical", title, detail)
 
     # ── Demande d'approbation ──
-    def _open_prompt(self, dev: winsys.DeviceArrival, now: float) -> None:
+    def _arm_prompt_timer(self, prompt: DevicePrompt, delay: float) -> None:
+        if self._prompt_timer:
+            self._prompt_timer.cancel()
+        self._prompt_timer = threading.Timer(delay, self._resolve_prompt,
+                                             args=(prompt.id, "deny", f"Pas de réponse en {prompt.timeout:g} s"))
+        self._prompt_timer.daemon = True
+        self._prompt_timer.start()
+
+    def _open_prompt(self, dev: winsys.DeviceArrival) -> None:
+        """Appelé sous _dev_lock. Le compte à rebours part une fois la fenêtre affichée."""
         timeout = self.config.s.device_prompt_timeout
         self.keyboard.start()
-        prompt = DevicePrompt(devices=[dev], deadline=now + timeout, timeout=timeout)
-        with self._lock:
-            self._prompt = prompt
-            self._prompt_timer = threading.Timer(timeout, self._resolve_prompt,
-                                                 args=(prompt.id, "deny", f"Pas de réponse en {timeout:g} s"))
-            self._prompt_timer.daemon = True
-            self._prompt_timer.start()
+        prompt = DevicePrompt(devices=[dev], deadline=time.time() + timeout + PROMPT_SHOW_GRACE, timeout=timeout)
+        self._prompt = prompt
+        # filet : même si la fenêtre ne s'affiche jamais, le délai expire et verrouille
+        self._arm_prompt_timer(prompt, timeout + PROMPT_SHOW_GRACE)
         log.warning("Branchement non approuvé : %s — décision demandée (%g s)", dev.name or dev.category, timeout)
         chime()
         try:
             self.on_device_prompt(self.prompt_info())
         except Exception:
             log.exception("Affichage de la demande impossible")
+        if self._prompt is prompt:
+            prompt.deadline = time.time() + timeout
+            self._arm_prompt_timer(prompt, timeout)
 
     def prompt_info(self) -> dict | None:
         p = self._prompt
@@ -537,7 +577,7 @@ class Engine:
         return self._resolve_prompt(prompt_id, decision, "Refusé par l'utilisateur")
 
     def _resolve_prompt(self, prompt_id: int | None, decision: str, reason: str, lock: bool = True) -> bool:
-        with self._lock:
+        with self._dev_lock:
             p = self._prompt
             if p is None or (prompt_id is not None and p.id != prompt_id):
                 return False
@@ -545,27 +585,30 @@ class Engine:
             if self._prompt_timer:
                 self._prompt_timer.cancel()
                 self._prompt_timer = None
-        names = ", ".join(dict.fromkeys(d.name or d.category for d in p.devices))
-        if decision == "deny":
-            self._eject(p.devices)
-            self.events.add("device", "critical", f"Refusé : {names}", reason)
-            if lock:
-                self._do_lock(f"Périphérique non approuvé : {names}", None)
-        else:
-            if decision == "always":
-                s = self.config.s
-                keys = [d.key for d in p.devices]
-                self.config.update({
-                    "trusted_devices": list(dict.fromkeys([*s.trusted_devices, *keys])),
-                    "device_names": {**s.device_names, **{d.key: d.name or d.category for d in p.devices}},
-                })
-            self.events.add("device", "info", f"Autorisé {'pour toujours' if decision == 'always' else 'cette fois'} : {names}",
-                            " · ".join(d.key for d in p.devices))
-        self.keyboard.stop()
-        try:
-            self.on_device_prompt(None)
-        except Exception:
-            log.exception("Fermeture de la demande impossible")
+            names = ", ".join(dict.fromkeys(d.name or d.category for d in p.devices))
+            try:
+                if decision == "deny":
+                    self._deny(p.devices, f"Périphérique non approuvé : {names}" if lock else None,
+                               f"Refusé : {names}", reason)
+                else:
+                    if decision == "always":
+                        s = self.config.s
+                        try:
+                            self.config.update({
+                                "trusted_devices": list(dict.fromkeys([*s.trusted_devices, *(d.key for d in p.devices)])),
+                                "device_names": {**s.device_names, **{d.key: d.name or d.category for d in p.devices}},
+                            })
+                        except Exception:
+                            log.exception("Mémorisation du périphérique impossible")
+                    self._journal("device", "info",
+                                  f"Autorisé {'pour toujours' if decision == 'always' else 'cette fois'} : {names}",
+                                  " · ".join(d.key for d in p.devices))
+            finally:
+                self.keyboard.stop()
+                try:
+                    self.on_device_prompt(None)
+                except Exception:
+                    log.exception("Fermeture de la demande impossible")
         self._publish(force=True)
         return True
 
@@ -576,12 +619,12 @@ class Engine:
             return
         for d in devices:
             try:
-                ok, detail = winsys.eject_device(d.instance)
+                ok, _detail = winsys.eject_device(d.instance)
             except Exception:
                 log.exception("Éjection impossible : %s", d.instance)
                 continue
             if ok:
-                self.events.add("device", "info", f"Éjecté : {d.name or d.category}", "Rebranchez-le pour le réautoriser")
+                self._journal("device", "info", f"Éjecté : {d.name or d.category}", "Rebranchez-le pour le réautoriser")
 
     def _on_config(self, changed: dict) -> None:
         s = self.config.s

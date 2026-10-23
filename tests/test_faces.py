@@ -276,3 +276,23 @@ def test_known_owner_needs_three_consecutive_misses():
     t.observe_similarity("alice", 0.10, 0.42, 9.0)
     t.observe_similarity("alice", 0.10, 0.42, 10.0)
     assert t.status == "unknown"
+
+
+def test_never_recognised_face_becomes_unknown_after_pending_max():
+    """Revue : un inconnu dont le score reste entre 0,30 et le seuil n'était jamais verrouillé."""
+    t = new_track()
+    t.first_seen = 0.0
+    for i in range(6):
+        t.observe_similarity("alice", 0.36, 0.42, 0.5 + i * 0.3)
+    assert t.status == "pending"                        # < PENDING_MAX
+    t.observe_similarity("alice", 0.36, 0.42, Track.PENDING_MAX + 0.1)
+    assert t.status == "unknown"
+
+
+def test_recognised_owner_dipping_below_threshold_stays_pending():
+    t = new_track()
+    t.first_seen = 0.0
+    t.observe_similarity("alice", 0.80, 0.42, 0.1)
+    for i in range(10):
+        t.observe_similarity("alice", 0.36, 0.42, 1.0 + i)
+    assert t.status in ("known", "pending")

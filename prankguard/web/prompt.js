@@ -38,10 +38,11 @@ async function decide(decision) {
   sent = true;
   document.querySelectorAll("button").forEach(b => { b.disabled = true; });
   try {
-    await fetch("/api/devices/decide", {
+    const r = await fetch("/api/devices/decide", {
       method: "POST", headers: { "X-PG-Token": TOKEN, "Content-Type": "application/json" },
       body: JSON.stringify({ id: prompt.id, decision }),
     });
+    if (!r.ok) throw new Error(String(r.status));
   } catch (e) {
     sent = false;
     document.querySelectorAll("button").forEach(b => { b.disabled = false; });

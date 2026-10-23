@@ -327,6 +327,24 @@ def classify(class_guid: str, path: str) -> DeviceArrival | None:
     return DeviceArrival(category=cat, name=_registry_name(instance), key=key, instance=instance)
 
 
+def split_burst(items: list[DeviceArrival]) -> list[list[DeviceArrival]]:
+    """Sépare une rafale par périphérique physique (VID:PID) : un appareil approuvé branché en même
+    temps qu'un autre ne doit jamais le faire passer pour approuvé. Les interfaces sans VID:PID
+    (volume de stockage…) rejoignent le premier périphérique identifié."""
+    groups: dict[str, list[DeviceArrival]] = {}
+    loose: list[DeviceArrival] = []
+    for d in items:
+        if ":" in d.key and len(d.key) == 9:
+            groups.setdefault(d.key, []).append(d)
+        else:
+            loose.append(d)
+    out = list(groups.values())
+    if not out:
+        return [loose] if loose else []
+    out[0].extend(loose)
+    return out
+
+
 def merge_burst(items: list[DeviceArrival]) -> DeviceArrival:
     """Un branchement physique déclenche plusieurs interfaces : on les fusionne en un seul événement."""
     best = min(items, key=lambda d: _PRIORITY.index(d.category) if d.category in _PRIORITY else 99)
@@ -342,6 +360,7 @@ class SystemWatcher:
     """Fenêtre Win32 cachée dans son propre thread ; callbacks appelés depuis ce thread."""
 
     BURST_WINDOW = 0.8
+    BURST_MAX = 2.0        # une rafale ininterrompue ne retarde jamais la décision au-delà
 
     def __init__(self,
                  on_device: Callable[[DeviceArrival], None] | None = None,
@@ -362,6 +381,7 @@ class SystemWatcher:
         self._ready = threading.Event()
         self._burst: list[DeviceArrival] = []
         self._burst_lock = threading.Lock()
+        self._burst_started = 0.0
         self._burst_timer: threading.Timer | None = None
         self._wndproc = WNDPROC(self._proc)   # référence conservée (sinon GC -> crash)
 
@@ -429,9 +449,8 @@ class SystemWatcher:
             elif msg == WM_DISPLAYCHANGE and self.on_display:
                 self.on_display()
             elif msg == WM_QUERYENDSESSION:
-                # arrêt / déconnexion de Windows : on ne bloque jamais, on se prépare à quitter
-                if self.on_endsession:
-                    self.on_endsession()
+                # simple question : on ne bloque jamais l'arrêt, mais on ne quitte qu'à la confirmation
+                # (WM_ENDSESSION) — un arrêt annulé ne doit pas laisser le poste sans protection
                 return 1
             elif msg == WM_ENDSESSION and wparam and self.on_endsession:
                 self.on_endsession()
@@ -461,10 +480,14 @@ class SystemWatcher:
             return
         with self._burst_lock:
             first = not self._burst
+            now = time.monotonic()
+            if first:
+                self._burst_started = now
             self._burst.append(dev)
             if self._burst_timer:
                 self._burst_timer.cancel()
-            self._burst_timer = threading.Timer(self.BURST_WINDOW, self._flush_burst)
+            delay = max(0.0, min(self.BURST_WINDOW, self._burst_started + self.BURST_MAX - now))
+            self._burst_timer = threading.Timer(delay, self._flush_burst)
             self._burst_timer.daemon = True
             self._burst_timer.start()
         if first and self.on_device_early:
@@ -476,9 +499,11 @@ class SystemWatcher:
     def _flush_burst(self) -> None:
         with self._burst_lock:
             items, self._burst = self._burst, []
-        if items and self.on_device:
+        if not self.on_device:
+            return
+        for group in split_burst(items):
             try:
-                dev = merge_burst(items)
+                dev = merge_burst(group)
                 name = product_name(dev.instance)
                 self.on_device(replace(dev, name=name) if name else dev)
             except Exception:
@@ -506,6 +531,7 @@ class KeyboardBlocker:
         self._ready = threading.Event()
         self._timer: threading.Timer | None = None
         self._proc = None
+        self._gen = 0
         self.swallowed = 0
 
     @property
@@ -517,17 +543,26 @@ class KeyboardBlocker:
             if self.active:
                 return True
             self._ready.clear()
-            self._ok, self.swallowed = False, 0
+            self._ok, self.swallowed, self._tid = False, 0, 0
+            self._gen += 1
+            gen = self._gen
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(self.MAX_SECONDS, self._expire, args=(gen,))
+            self._timer.daemon = True
             self._thread = threading.Thread(target=self._run, name="KeyboardBlocker", daemon=True)
             self._thread.start()
-        self._ready.wait(2.0)
-        if self._ok:
-            with self._lock:
-                self._timer = threading.Timer(self.MAX_SECONDS, self.stop)
-                self._timer.daemon = True
-                self._timer.start()
-            log.info("Clavier bloqué en attendant votre décision")
-        return self._ok
+        if not self._ready.wait(2.0) or not self._ok:
+            self.stop()
+            return False
+        self._timer.start()
+        log.info("Clavier bloqué en attendant votre décision")
+        return True
+
+    def _expire(self, gen: int) -> None:
+        if gen == self._gen:
+            log.warning("Blocage clavier levé par sécurité après %g s", self.MAX_SECONDS)
+            self.stop()
 
     def stop(self) -> None:
         with self._lock:
@@ -579,12 +614,17 @@ def _device_id(devinst: int) -> str:
 def physical_device(instance: str) -> tuple[int, str] | None:
     """Remonte d'une interface (HID, USBSTOR, fonction USB &MI_xx) au périphérique USB physique."""
     node = wintypes.DWORD()
+    bus = instance.split("\\", 1)[0].upper()
+    if bus.startswith("BTH"):
+        return None          # Bluetooth : remonter atteindrait la radio de l'ordinateur, pas l'appareil
     if cfgmgr32.CM_Locate_DevNodeW(ctypes.byref(node), instance, 0) != 0:
         return None
+    m = _VIDPID.search(instance)
+    want = f"VID_{m.group(1)}&PID_{m.group(2)}".upper() if m else None
     cur = node.value
     for _ in range(8):
         iid = _device_id(cur).upper()
-        if iid.startswith("USB\\VID_") and "&MI_" not in iid:
+        if iid.startswith("USB\\VID_") and "&MI_" not in iid and (want is None or want in iid):
             return cur, iid
         parent = wintypes.DWORD()
         if cfgmgr32.CM_Get_Parent(ctypes.byref(parent), cur, 0) != 0:

@@ -66,7 +66,14 @@ def test_system_watcher_end_to_end(monkeypatch):
         _send(w._hwnd, winsys.WM_WTSSESSION_CHANGE, winsys.WTS_SESSION_LOCK, 0)
         _send(w._hwnd, winsys.WM_WTSSESSION_CHANGE, winsys.WTS_SESSION_UNLOCK, 0)
         assert sessions == ["lock", "unlock"]
-        # arrêt de Windows : on ne bloque jamais (TRUE)
+        # arrêt de Windows : on ne bloque jamais (TRUE), mais on ne quitte qu'à la confirmation
+        ended = []
+        w.on_endsession = lambda: ended.append(1)
         assert _send(w._hwnd, winsys.WM_QUERYENDSESSION, 0, 0) == 1
+        assert ended == []                                  # arrêt peut-être annulé : on reste actif
+        _send(w._hwnd, winsys.WM_ENDSESSION, 0, 0)         # annulé
+        assert ended == []
+        _send(w._hwnd, winsys.WM_ENDSESSION, 1, 0)         # confirmé
+        assert ended == [1]
     finally:
         w.stop()

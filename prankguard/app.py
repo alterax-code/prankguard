@@ -83,8 +83,8 @@ class PrankGuardApp:
                     except Exception:
                         log.exception("Fermeture de la fenêtre de décision")
                 return
-            if self.prompt_window is not None:
-                return          # déjà ouverte : elle se met à jour par SSE
+            if self.prompt_window is not None or self.engine.prompt_info() is None:
+                return          # déjà ouverte (mise à jour par SSE) ou déjà tranchée entre-temps
             url = f"http://127.0.0.1:{self.server.port}/prompt.html#t={self.server.token}"
             self.prompt_window = webview.create_window(
                 "PrankGuard — nouveau périphérique", url, width=480, height=340, resizable=False,
@@ -173,6 +173,7 @@ class PrankGuardApp:
             self.engine.stop,
             self.server.stop,
             lambda: self.tray and self.tray.stop(),
+            lambda: self.prompt_window and self.prompt_window.destroy(),   # sinon webview.start() ne rend pas la main
             lambda: self.window and self.window.destroy(),
             lambda: paths.INSTANCE_FILE.unlink(missing_ok=True),
             self.events.close,

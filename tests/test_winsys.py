@@ -138,3 +138,38 @@ def test_wts_session_flags_reads_current_session():
 
 def test_product_name_is_empty_for_unknown_instance():
     assert winsys.product_name(r"USB\VID_0000&PID_0000\INEXISTANT") == ""
+
+
+from prankguard.winsys import KeyboardBlocker as RealKeyboardBlocker  # noqa: E402  (avant le patch conftest)
+
+
+def _arr(key, cat="hid", inst=r"USB\X"):
+    return DeviceArrival(category=cat, name="", key=key, instance=inst)
+
+
+def test_split_burst_never_lets_a_trusted_device_vouch_for_another():
+    groups = winsys.split_burst([_arr("1532:00B4"), _arr("DEAD:BEEF", "keyboard"), _arr("1532:00B4", "mouse")])
+    assert sorted(g[0].key for g in groups) == ["1532:00B4", "DEAD:BEEF"]
+    assert sum(len(g) for g in groups) == 3
+
+
+def test_split_burst_attaches_loose_interfaces_to_first_device():
+    groups = winsys.split_burst([_arr("0781:5581", "usb"), _arr(r"STORAGE\VOLUME\X", "storage")])
+    assert len(groups) == 1 and len(groups[0]) == 2
+    assert winsys.split_burst([_arr(r"STORAGE\VOLUME\X", "storage")])[0][0].key == r"STORAGE\VOLUME\X"
+    assert winsys.split_burst([]) == []
+
+
+def test_bluetooth_devices_are_never_resolved_to_the_radio():
+    assert winsys.physical_device(r"BTHENUM\{0000110b-0000-1000-8000-00805f9b34fb}_LOCALMFG&0002\7&1&0") is None
+
+
+def test_keyboard_safety_timer_only_ends_its_own_block(monkeypatch):
+    kb = RealKeyboardBlocker()
+    stopped = []
+    monkeypatch.setattr(kb, "stop", lambda: stopped.append(1))
+    kb._gen = 2
+    kb._expire(1)           # minuterie d'un ancien blocage : ignorée
+    assert stopped == []
+    kb._expire(2)
+    assert stopped == [1]

@@ -208,9 +208,11 @@ class Track:
     hits: int = 1
     live: float | None = None  # EMA de la probabilité "visage réel"
     live_n: int = 0
+    ever_known: bool = False
 
     UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
     UNKNOWN_MAX = 0.30        # plafond absolu : un seuil « strict » ne transforme jamais le propriétaire en inconnu
+    PENDING_MAX = 4.0         # jamais reconnu après ce temps (et ≥ 4 mesures) : inconnu, quel que soit le score
 
     @classmethod
     def unknown_below(cls, threshold: float) -> float:
@@ -236,11 +238,16 @@ class Track:
             # reconnu : immédiat si très net, sinon après 2 observations
             if sim >= threshold + 0.08 or n >= 2:
                 self.status, self.name = "known", name
+                self.ever_known = True
         elif self.ema < self.unknown_below(threshold):
             if self.status == "known" and (n < 4 or any(x >= self.unknown_below(threshold) for x in list(self.sims)[-3:])):
                 return  # hystérésis : seuls 3 ratés consécutifs font basculer un propriétaire reconnu
             if n >= 2:
                 self.status, self.name = "unknown", None
+        elif (self.status == "pending" and not self.ever_known and n >= 4
+              and now - self.first_seen >= self.PENDING_MAX):
+            # entre « inconnu » et « reconnu » trop longtemps : on ne peut pas l'identifier -> inconnu
+            self.status, self.name = "unknown", None
         elif self.status == "unknown" and self.ema >= threshold - self.UNKNOWN_GAP / 2:
             self.status = "pending"   # zone d'incertitude : ni propriétaire, ni menace
 

@@ -324,3 +324,44 @@ def test_learning_can_be_disabled(eng, learner, monkeypatch):
     monkeypatch.setattr(eng.faces, "embed", lambda f, x: _unit((0, 1)))
     eng._analyze(frame + 100, 1000.0)
     assert called == []
+
+
+def test_failed_lockworkstation_does_not_leave_engine_blind(eng, monkeypatch):
+    monkeypatch.setattr(winsys, "lock_workstation", lambda: False)
+    eng._do_lock("Inconnu devant l'écran", np.zeros((480, 640, 3), np.uint8))
+    assert not eng.guard.locked
+
+
+def test_refusal_locks_before_ejecting(eng, ask, monkeypatch):
+    order = []
+    monkeypatch.setattr(winsys, "lock_workstation", lambda: order.append("lock") or True)
+    monkeypatch.setattr(winsys, "eject_device", lambda inst: order.append("eject") or (True, inst))
+    eng._on_device(_dev("storage"))
+    eng.decide_device(eng.snapshot()["device_prompt"]["id"], "deny")
+    assert order == ["lock", "eject"]
+
+
+def test_journal_failure_never_blocks_refusal(eng, ask, monkeypatch):
+    def broken(*a, **k):
+        raise OSError("disque plein")
+    eng._on_device(_dev("hid"))
+    monkeypatch.setattr(eng.events, "add", broken)
+    assert eng.decide_device(eng.snapshot()["device_prompt"]["id"], "deny")
+    assert ask["lock"] == 1 and not eng.keyboard.active and ask["prompt"][-1] is None
+
+
+def test_decision_racing_with_absent_owner_device_still_locks(eng, ask):
+    """Revue : « autoriser » cliqué pendant qu'un 2e périphérique arrive en l'absence du propriétaire."""
+    eng._on_device(_dev("hid"))
+    eng.guard.owner_last_seen = 0.0                    # le propriétaire est parti
+    eng._on_device(_dev("storage", key="0781:5581", name="SanDisk"))
+    assert ask["lock"] == 1 and eng.snapshot()["device_prompt"] is None
+
+
+def test_prompt_countdown_starts_after_window_is_shown(eng, ask, monkeypatch):
+    def slow_window(info):
+        if info:
+            time.sleep(0.3)
+    eng.on_device_prompt = slow_window
+    eng._on_device(_dev("hid"))
+    assert eng.snapshot()["device_prompt"]["left"] >= eng.config.s.device_prompt_timeout - 0.1
