@@ -108,6 +108,7 @@ function onState(st) {
   if (st.state === "camera_lost" && st.camera.dark) sub = "L'objectif semble masqué.";
   if (st.state === "camera_lost" && st.camera.error) sub = st.camera.error;
   if (st.state === "camera_lost" && st.camera_waived) sub = "Objectif fermé après votre déverrouillage : pas de nouveau verrouillage tant que l'image ne revient pas.";
+  if (st.state === "locked" && st.dry_run) sub = "Mode test : verrouillage Windows simulé, déverrouillage automatique dans 4 s.";
   if (st.state === "idle" && !st.profiles) sub = "Aucun profil enregistré : tout visage sera considéré comme inconnu.";
   if (st.countdown != null) {
     if (st.state === "alert") sub = `Verrouillage dans ${st.countdown.toFixed(1)} s`;
@@ -119,6 +120,7 @@ function onState(st) {
   $("#heroSub").textContent = sub;
   $("#heroIconUse").setAttribute("href", "#" + meta.i);
   $("#brandState").textContent = SHORT[st.state] || st.state;
+  $("#testBadge").hidden = !st.dry_run;
   $("#ringFg").style.strokeDashoffset = RING_C * (1 - ringProgress(st));
 
   $("#armToggle").checked = st.armed;

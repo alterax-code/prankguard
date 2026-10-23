@@ -49,6 +49,8 @@ class Engine:
         self.guard = G.Guard(s)
         self.guard.enrolled = not self.matcher.empty
         self.dry_run = dry_run
+        if dry_run:
+            log.warning("MODE TEST (--dry-run) : LockWorkStation ne sera jamais appelé")
         self.alarm = Alarm()
         self.watcher = winsys.SystemWatcher(on_device=self._on_device, on_session=self._on_session,
                                             on_power=self._on_power)
@@ -333,7 +335,9 @@ class Engine:
                 self.guard.on_session_locked()
                 self._reset_tracks = True
             self._lock_check_after = time.time() + LOCK_CONFIRM_DELAY
-            if not winsys.lock_workstation():
+            if winsys.lock_workstation():
+                log.info("LockWorkStation appelé (équivalent Win+L)")
+            else:
                 log.error("LockWorkStation a échoué")
         # 2) puis journaliser / alerter, au mieux
         try:
