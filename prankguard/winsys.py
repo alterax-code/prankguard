@@ -124,6 +124,7 @@ kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
 kernel32.CreateMutexW.restype = wintypes.HANDLE
 kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 wtsapi32.WTSRegisterSessionNotification.argtypes = [wintypes.HWND, wintypes.DWORD]
 wtsapi32.WTSUnRegisterSessionNotification.argtypes = [wintypes.HWND]
 wtsapi32.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
@@ -222,8 +223,15 @@ _mutex_handle = None
 def acquire_single_instance(name: str = "Local\\PrankGuard.v3") -> bool:
     """True si on est la seule instance (le handle reste ouvert jusqu'à la fin du process)."""
     global _mutex_handle
-    _mutex_handle = kernel32.CreateMutexW(None, False, name)
-    return ctypes.get_last_error() != ERROR_ALREADY_EXISTS
+    h = kernel32.CreateMutexW(None, False, name)
+    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        # on rend notre handle : sinon le mutex survivrait à l'autre instance et un nouvel essai
+        # (après son arrêt) échouerait encore
+        if h:
+            kernel32.CloseHandle(h)
+        return False
+    _mutex_handle = h
+    return True
 
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"

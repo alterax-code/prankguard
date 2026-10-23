@@ -173,3 +173,16 @@ def test_keyboard_safety_timer_only_ends_its_own_block(monkeypatch):
     assert stopped == []
     kb._expire(2)
     assert stopped == [1]
+
+
+def test_single_instance_can_be_reacquired_after_owner_exits():
+    import ctypes
+    name = r"Local\PrankGuard.test.%d" % id(object())
+    k32 = winsys.kernel32
+    other = k32.CreateMutexW(None, False, name)          # « autre instance »
+    try:
+        assert winsys.acquire_single_instance(name) is False
+    finally:
+        k32.CloseHandle(other)                           # elle se termine
+    assert winsys.acquire_single_instance(name) is True
+    k32.CloseHandle(winsys._mutex_handle)

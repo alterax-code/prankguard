@@ -1,6 +1,7 @@
 """Point d'entrée : python -m prankguard [--background] [--headless] [--debug]"""
 import argparse
 import sys
+import time
 
 
 def main() -> int:
@@ -16,9 +17,19 @@ def main() -> int:
 
     from .app import PrankGuardApp, signal_existing_instance
     if not winsys.acquire_single_instance():
-        logger.info("Instance déjà active — affichage de sa fenêtre")
-        signal_existing_instance()
-        return 0
+        if signal_existing_instance():
+            logger.info("Instance déjà active — affichage de sa fenêtre")
+            return 0
+        # l'autre instance est en train de s'arrêter (relance juste après « Quitter ») : on attend
+        # qu'elle libère la place plutôt que de ne rien lancer du tout
+        for _ in range(30):
+            time.sleep(0.5)
+            if winsys.acquire_single_instance():
+                logger.info("Instance précédente arrêtée — démarrage")
+                break
+        else:
+            logger.warning("Une instance bloquée occupe la place — abandon")
+            return 0
     try:
         PrankGuardApp(background=args.background, headless=args.headless, debug=args.debug,
                       dry_run=args.dry_run).run()
