@@ -363,9 +363,11 @@ class Engine:
                 self.camera.pause()
             log.info("Session verrouillée — caméra libérée")
         else:
-            self.alarm.stop()
             with self._lock:
+                if not self.guard.locked:
+                    return      # doublon (resynchronisation puis notification WTS) : déjà réarmé
                 self.guard.on_session_unlocked(now)
+            self.alarm.stop()
             self.camera.resume()
             try:
                 self.events.add("session", "info", "Session déverrouillée")

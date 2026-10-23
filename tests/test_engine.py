@@ -156,3 +156,14 @@ def test_device_locks_without_any_profile_when_rule_is_always(eng, locks):
     assert not eng.guard.enrolled
     eng._on_device(_dev("hid"))
     assert locks == [1]
+
+
+def test_duplicate_unlock_is_ignored(eng, locks, monkeypatch):
+    """Terrain : resynchronisation puis notification WTS -> un seul réarmement journalisé."""
+    added = []
+    monkeypatch.setattr(eng.events, "add", lambda *a, **k: added.append(a[0]))
+    eng._on_session("lock")
+    eng._on_session("unlock")
+    eng._on_session("unlock")
+    assert added.count("session") == 1
+    assert not eng.guard.locked

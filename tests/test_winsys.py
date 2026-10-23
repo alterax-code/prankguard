@@ -119,3 +119,18 @@ def test_safety_net_blocks_dangerous_calls():
         winsys.lock_workstation()
     with pytest.raises(AssertionError):
         winsys.set_autostart(True)
+
+
+@pytest.mark.parametrize("flags, locked", [(0, True), (1, False)])
+def test_session_lock_state_comes_from_wts(monkeypatch, flags, locked):
+    monkeypatch.setattr(winsys, "_wts_session_flags", lambda: flags)
+    assert winsys.is_session_locked() is locked
+
+
+def test_session_lock_state_falls_back_when_wts_unknown(monkeypatch):
+    monkeypatch.setattr(winsys, "_wts_session_flags", lambda: None)
+    assert winsys.is_session_locked() is False      # session de test interactive, déverrouillée
+
+
+def test_wts_session_flags_reads_current_session():
+    assert winsys._wts_session_flags() == 1         # les tests tournent dans une session ouverte

@@ -26,10 +26,12 @@ lancez directement `dist\PrankGuard\PrankGuard.exe`.
 
 **Depuis les sources** (Python 3.11+) :
 
-```bat
-setup.bat
-run.bat
+```powershell
+.\setup.bat
+.un.bat
 ```
+
+(Dans PowerShell, le préfixe `.\` est obligatoire ; dans cmd, `run.bat` suffit.)
 
 Options : `--background` (démarrer dans la zone de notification), `--dry-run` (simule les
 verrouillages, pour tester), `--headless` (sans fenêtre), `--debug`.

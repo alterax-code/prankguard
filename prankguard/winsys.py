@@ -94,6 +94,9 @@ kernel32.CreateMutexW.restype = wintypes.HANDLE
 kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
 wtsapi32.WTSRegisterSessionNotification.argtypes = [wintypes.HWND, wintypes.DWORD]
 wtsapi32.WTSUnRegisterSessionNotification.argtypes = [wintypes.HWND]
+wtsapi32.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+                                                 ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.DWORD)]
+wtsapi32.WTSFreeMemory.argtypes = [ctypes.c_void_p]
 crypt32.CryptProtectData.argtypes = [ctypes.POINTER(DATA_BLOB), wintypes.LPCWSTR, ctypes.POINTER(DATA_BLOB),
                                      wintypes.LPVOID, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(DATA_BLOB)]
 crypt32.CryptUnprotectData.argtypes = [ctypes.POINTER(DATA_BLOB), wintypes.LPVOID, ctypes.POINTER(DATA_BLOB),
@@ -125,8 +128,32 @@ def lock_workstation() -> bool:
     return bool(user32.LockWorkStation())
 
 
+def _wts_session_flags() -> int | None:
+    """SessionFlags de WTSINFOEXW (niveau 1) : 0 = verrouillée, 1 = déverrouillée, -1 = inconnu."""
+    WTS_CURRENT_SESSION, WTSSessionInfoEx = 0xFFFFFFFF, 25
+    buf, size = ctypes.c_void_p(), wintypes.DWORD()
+    if not wtsapi32.WTSQuerySessionInformationW(None, WTS_CURRENT_SESSION, WTSSessionInfoEx,
+                                                ctypes.byref(buf), ctypes.byref(size)):
+        return None
+    try:
+        if size.value < 20:
+            return None
+        # Level (DWORD) + alignement 8 de l'union, puis SessionId, SessionState, SessionFlags
+        level, _pad, _sid, _state, flags = (ctypes.c_int32 * 5).from_address(buf.value)
+        return flags if level == 1 else None
+    finally:
+        wtsapi32.WTSFreeMemory(buf)
+
+
 def is_session_locked() -> bool:
-    """Heuristique fiable : le bureau d'entrée n'est pas accessible quand la session est verrouillée."""
+    """État officiel de la session (WTS) ; repli sur l'accessibilité du bureau d'entrée.
+
+    OpenInputDesktop seul redevient accessible avant la fin du déverrouillage (Windows Hello) :
+    il annonçait un faux « déverrouillé » pendant que l'écran de verrouillage était encore affiché.
+    """
+    flags = _wts_session_flags()
+    if flags in (0, 1):
+        return flags == 0
     DESKTOP_SWITCHDESKTOP = 0x0100
     h = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
     if not h:
