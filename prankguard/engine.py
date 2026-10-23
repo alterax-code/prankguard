@@ -29,6 +29,8 @@ REVERIFY_OTHER = 0.25        # identification rapide des visages inconnus / en a
 MAX_EMBEDS_PER_FRAME = 3
 DARK_LEVEL = 10              # luminosité moyenne en dessous de laquelle la caméra est considérée masquée
 DEVICE_QUIET_AFTER_WAKE = 12.0
+ENROLL_TIMEOUT = 120.0       # un enrôlement abandonné ne doit jamais laisser la protection coupée
+LOCK_CONFIRM_DELAY = 2.5     # après LockWorkStation, délai avant de vérifier l'état réel de la session
 
 
 class Engine:
@@ -60,7 +62,9 @@ class Engine:
         self._enroll: EnrollSession | None = None
         self._snooze_until = 0.0
         self._quiet_devices_until = time.time() + 3.0
-        self._lock_pending_check = 0.0
+        self._lock_check_after = 0.0
+        self._next_session_poll = 0.0
+        self._reset_tracks = False    # demandé par d'autres threads, appliqué dans le thread moteur
         self.metrics = {"analysis_ms": 0.0, "analysis_fps": 0.0, "camera_fps": 0.0, "embeds_per_s": 0.0}
         self._version = 0
 
@@ -73,10 +77,10 @@ class Engine:
             self.guard.disarm()
         else:
             self.guard.arm(time.time(), delay=2.0)
+        self.camera.start()
         if winsys.is_session_locked():
             self.guard.on_session_locked()
-        else:
-            self.camera.start()
+            self.camera.pause()
         self.watcher.start()
         self._thread = threading.Thread(target=self._loop, name="Engine", daemon=True)
         self._thread.start()
@@ -104,6 +108,11 @@ class Engine:
         self._publish(force=True)
 
     def snooze(self, minutes: float) -> None:
+        try:
+            minutes = float(minutes)
+        except (TypeError, ValueError):
+            minutes = 15.0
+        minutes = 15.0 if minutes != minutes else max(1.0, min(1440.0, minutes))  # NaN / inf
         with self._lock:
             self.guard.disarm()
             self._snooze_until = time.time() + minutes * 60
@@ -116,8 +125,11 @@ class Engine:
     def reload_gallery(self) -> None:
         self.matcher.set_gallery(self.gallery.embeddings())
         with self._lock:
+            was = self.guard.enrolled
             self.guard.enrolled = not self.matcher.empty
-            self.tracker.reset()
+            if self.guard.enrolled and not was and self.guard.armed:
+                self.guard.arm(time.time())   # premier profil : on repart d'un état propre
+            self._reset_tracks = True
 
     def start_enroll(self, name: str) -> None:
         with self._lock:
@@ -133,8 +145,9 @@ class Engine:
             self._publish(force=True)
             return {"ok": False, "error": "Pas assez d'échantillons"}
         emb = sess.result()
+        first = not any(n != sess.name for n in self.gallery.people)
         self.gallery.upsert(sess.name, emb, sess.best_thumb)
-        if sess.base_yaw is not None:
+        if sess.base_yaw is not None and first:
             # la position de la caméra par rapport à l'écran vient d'être mesurée
             self.config.update({"gaze_yaw": round(sess.base_yaw, 3), "gaze_pitch": round(sess.base_pitch, 3)})
         self.reload_gallery()
@@ -159,12 +172,21 @@ class Engine:
                     self._snooze_until = 0.0
                     self.guard.arm(now)
                     self.events.add("system", "info", "Fin de la pause — surveillance réactivée")
-                if self._lock_pending_check and now >= self._lock_pending_check:
-                    self._lock_pending_check = 0.0
+                if self._enroll and now - self._enroll.started > ENROLL_TIMEOUT:
+                    log.warning("Enrôlement abandonné — annulation automatique")
+                    self.cancel_enroll()
+                if self._reset_tracks:
+                    self._reset_tracks = False
+                    self.tracker.reset()
+                    self._tracks = []
+                # Filet de sécurité : si l'événement de déverrouillage est perdu (ou si
+                # LockWorkStation a échoué), on resynchronise sur l'état réel de la session.
+                if (self.guard.locked and not self.dry_run and now >= self._lock_check_after
+                        and now >= self._next_session_poll):
+                    self._next_session_poll = now + 1.0
                     if not winsys.is_session_locked():
-                        log.warning("La session ne s'est pas verrouillée — réarmement")
-                        self.guard.on_session_unlocked(now)
-                        self.camera.resume()
+                        log.warning("Session déverrouillée sans notification — resynchronisation")
+                        self._on_session("unlock")
 
                 if self.guard.locked and not self._enroll:
                     self._set_verdict(G.Verdict(G.LOCKED))
@@ -222,27 +244,34 @@ class Engine:
             return 1
 
         tracks = self.tracker.update(faces, now)
-        # Reconnaissance : priorité aux visages non identifiés, budget limité par image
+        # Reconnaissance : priorité aux visages non identifiés, budget limité par image.
+        # Un visage qui regarde l'écran est toujours analysé, même petit ou de biais,
+        # sinon il resterait "en analyse" indéfiniment sans jamais déclencher.
         embeds = 0
         due = []
         for t in tracks:
-            if not self.faces.embeddable(t.face):
+            if not (self.faces.embeddable(t.face) or self._is_looking(t)):
                 continue
             period = REVERIFY_KNOWN if t.status in ("known", "spoof") else REVERIFY_OTHER
             if now - t.last_embed >= period:
                 due.append(t)
         due.sort(key=lambda t: (t.status in ("known", "spoof"), t.last_embed))
         for t in due[:MAX_EMBEDS_PER_FRAME]:
-            if s.anti_spoof:
-                t.observe_liveness(self.faces.liveness(frame, t.face))
-            if self.matcher.empty:
-                # aucun profil enrôlé : tout visage réel est inconnu
+            try:
+                if s.anti_spoof:
+                    t.observe_liveness(self.faces.liveness(frame, t.face))
+                if self.matcher.empty:
+                    # aucun profil enrôlé : tout visage réel est inconnu
+                    t.last_embed = now
+                    t.status = "spoof" if t.is_spoof else ("unknown" if t.hits >= 2 else "pending")
+                else:
+                    name, sim = self.matcher.best(self.faces.embed(frame, t.face))
+                    t.observe_similarity(name, sim, s.match_threshold, now)
+                embeds += 1
+            except Exception:
+                # une erreur d'un modèle ne doit jamais empêcher la décision de tourner
                 t.last_embed = now
-                t.status = "spoof" if t.is_spoof else ("unknown" if t.hits >= 2 else "pending")
-            else:
-                name, sim = self.matcher.best(self.faces.embed(frame, t.face))
-                t.observe_similarity(name, sim, s.match_threshold, now)
-            embeds += 1
+                log.exception("Analyse d'un visage en erreur")
         self._tracks = tracks
 
         obs = G.Observation(now, not self._dark, [
@@ -283,10 +312,7 @@ class Engine:
             _, _, frame = self.camera.latest()
         snap = frame if (s.save_snapshots and frame is not None and not manual) else None
         log.warning("VERROUILLAGE : %s", reason)
-        self.events.add("lock", "info" if manual else "critical", reason,
-                        "Manuel" if manual else "Automatique", snap)
-        if s.alarm_enabled and not manual:
-            self.alarm.play(s.alarm_volume)
+        # 1) verrouiller d'abord : rien (disque plein, base verrouillée…) ne doit pouvoir l'empêcher
         if self.dry_run:
             # simulation : verrouillage puis déverrouillage automatique, la session réelle n'est pas touchée
             log.warning("DRY-RUN : LockWorkStation non appelé")
@@ -294,13 +320,24 @@ class Engine:
             t = threading.Timer(4.0, self._on_session, args=("unlock",))
             t.daemon = True
             t.start()
-            return
-        with self._lock:
-            self.guard.on_session_locked()
-            self.tracker.reset()
-        self._lock_pending_check = time.time() + 2.5
-        if not winsys.lock_workstation():
-            log.error("LockWorkStation a échoué")
+        else:
+            with self._lock:
+                self.guard.on_session_locked()
+                self._reset_tracks = True
+            self._lock_check_after = time.time() + LOCK_CONFIRM_DELAY
+            if not winsys.lock_workstation():
+                log.error("LockWorkStation a échoué")
+        # 2) puis journaliser / alerter, au mieux
+        try:
+            self.events.add("lock", "info" if manual else "critical", reason,
+                            "Manuel" if manual else "Automatique", snap)
+        except Exception:
+            log.exception("Journalisation du verrouillage impossible")
+        if s.alarm_enabled and not manual:
+            try:
+                self.alarm.play(s.alarm_volume)
+            except Exception:
+                log.exception("Alarme impossible")
         self._publish(force=True)
 
     # ── Événements système ──
@@ -309,8 +346,7 @@ class Engine:
         if what == "lock":
             with self._lock:
                 self.guard.on_session_locked()
-                self.tracker.reset()
-            self._lock_pending_check = 0.0
+                self._reset_tracks = True
             if not self._enroll:
                 self.camera.pause()
             log.info("Session verrouillée — caméra libérée")
@@ -320,7 +356,10 @@ class Engine:
             with self._lock:
                 self.guard.on_session_unlocked(now)
             self.camera.resume()
-            self.events.add("session", "info", "Session déverrouillée")
+            try:
+                self.events.add("session", "info", "Session déverrouillée")
+            except Exception:
+                log.exception("Journal indisponible")
             log.info("Session déverrouillée — réarmement")
         self._publish(force=True)
 
@@ -328,7 +367,10 @@ class Engine:
         if what == "suspend":
             self.camera.pause()
         else:
-            self._quiet_devices_until = time.time() + DEVICE_QUIET_AFTER_WAKE
+            now = time.time()
+            self._quiet_devices_until = now + DEVICE_QUIET_AFTER_WAKE
+            with self._lock:
+                self.guard.on_camera_restart(now)   # la caméra peut mettre du temps à revenir
             if not winsys.is_session_locked():
                 self.camera.resume()
 
@@ -357,6 +399,8 @@ class Engine:
     def _on_config(self, changed: dict) -> None:
         s = self.config.s
         if {"camera_index", "camera_width", "camera_height"} & changed.keys():
+            with self._lock:
+                self.guard.on_camera_restart(time.time())
             self.camera.reconfigure(s.camera_index, s.camera_width, s.camera_height)
         if "start_with_windows" in changed:
             try:

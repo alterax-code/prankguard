@@ -195,7 +195,8 @@ def test_unknown_returns_to_pending_when_similarity_recovers():
 def test_spoof_when_liveness_low():
     t = new_track()
     t.observe_liveness(0.05)
-    assert not t.is_spoof                                # un seul échantillon ne suffit pas
+    t.observe_liveness(0.05)
+    assert not t.is_spoof                                # deux échantillons ne suffisent pas
     t.observe_liveness(0.05)
     assert t.is_spoof
     t.observe_similarity("alice", 0.95, THR, 1.0)

@@ -22,6 +22,7 @@ CAMERA_LOST = "camera_lost"
 SETUP = "setup"            # aucun profil enrôlé : aucune action automatique
 
 OWNER_MEMORY = 1.2         # le propriétaire reste "présent" ce temps après sa dernière détection
+LOOK_GAP = 0.6             # une détection manquée isolée ne remet pas le compte à rebours à zéro
 STARTUP_GRACE = 8.0        # temps laissé à la caméra pour s'ouvrir avant de la déclarer perdue
 
 
@@ -67,6 +68,7 @@ class Guard:
         self._surfer_since: float | None = None
         self._surfer_warned = False
         self._cam_lost_since: float | None = None
+        self._stranger_last: float | None = None
 
     # ── Événements externes ──
     def arm(self, now: float, delay: float | None = None) -> None:
@@ -93,6 +95,12 @@ class Guard:
         self.owner_last_seen = now
         if self.armed:
             self.arm(now)
+
+    def on_camera_restart(self, now: float) -> None:
+        """Caméra rouverte (reprise de veille, changement de caméra) : nouveau délai de démarrage."""
+        self._started = False
+        self._start_ref = now
+        self._cam_lost_since = None
 
     def owner_recent(self, now: float) -> bool:
         return now - self.owner_last_seen <= OWNER_MEMORY
@@ -127,7 +135,9 @@ class Guard:
             return Verdict(SETUP)
         owner_here = self.owner_recent(now)
         owner = self.owner_name if owner_here else None
-        stranger_looking = any(f.status == "unknown" and f.looking for f in obs.faces)
+        if any(f.status == "unknown" and f.looking for f in obs.faces):
+            self._stranger_last = now
+        stranger_looking = self._stranger_last is not None and now - self._stranger_last <= LOOK_GAP
         arming = now < self._arming_until
 
         if arming:

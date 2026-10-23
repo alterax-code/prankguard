@@ -132,7 +132,14 @@ function onState(st) {
   $("#camInfo").textContent = st.camera.open ? `${st.camera.width}×${st.camera.height} · ${st.camera.backend} · ${m.analysis_fps.toFixed(0)} analyses/s` : "";
   renderFaces(st.faces);
   renderCamEmpty();
-  if (st.enroll) renderEnroll(st.enroll);
+  if (st.enroll) {
+    renderEnroll(st.enroll);
+    // enrôlement orphelin (page rechargée, modale fermée) : on ne laisse jamais la protection suspendue
+    if (!enrollActive && $("#enrollModal").hidden && !S.cancelSent) {
+      S.cancelSent = true;
+      api("/api/enroll/cancel", {}).finally(() => setTimeout(() => { S.cancelSent = false; }, 2000));
+    }
+  }
   if (!prev || prev.profiles !== st.profiles) { if (S.page === "profiles") loadProfiles(); renderRules(); }
 }
 
@@ -354,7 +361,10 @@ $("#page-profiles").addEventListener("click", async e => {
     h.innerHTML = `<input class="input" value="${esc(old)}" maxlength="40" style="width:150px;text-align:center">`;
     const inp = $("input", h);
     inp.focus(); inp.select();
+    let finished = false;   // Entrée/Échap puis blur ne doivent valider qu'une fois
     const done = async ok => {
+      if (finished) return;
+      finished = true;
       const v = inp.value.trim();
       if (ok && v && v !== old) {
         const r = await api("/api/profiles/rename", { old, new: v });
@@ -415,7 +425,9 @@ async function finishEnroll() {
   if (!enrollActive) return;
   enrollActive = false;
   $("#enrollFinish").disabled = true;
-  const r = await api("/api/enroll/finish", {});
+  let r;
+  try { r = await api("/api/enroll/finish", {}); }
+  catch { r = { ok: false, error: "Moteur injoignable" }; }
   if (r.ok) {
     $("#enrollDoneText").textContent = `${r.samples} échantillons enregistrés. PrankGuard vous reconnaît désormais.`;
     enrollStep("done");

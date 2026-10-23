@@ -112,9 +112,33 @@ def test_stranger_alert_countdown_then_lock():
 def test_stranger_countdown_resets_when_stranger_stops_looking():
     g = started()
     g.step(obs(10.0, STRANGER))
-    assert g.step(obs(10.5, FaceObs("unknown", False))).state == G.WATCH
-    v = g.step(obs(11.0, STRANGER))
+    assert g.step(obs(10.5, FaceObs("unknown", False))).state == G.ALERT   # trou < LOOK_GAP toléré
+    assert g.step(obs(11.0, FaceObs("unknown", False))).state == G.WATCH   # au-delà : remise à zéro
+    v = g.step(obs(11.5, STRANGER))
     assert v.countdown == pytest.approx(1.5)
+
+
+def test_flickering_stranger_detection_still_locks():
+    """Revue #5 : une détection qui clignote (1 image sur 2 manquée) ne doit pas empêcher le verrouillage."""
+    g = started()
+    t, locked = 10.0, False
+    for i in range(40):
+        faces = (STRANGER,) if i % 2 == 0 else ()
+        v = g.step(obs(t, *faces))
+        if v.action == "lock":
+            locked = True
+            break
+        t += 1 / 15
+    assert locked and t - 10.0 <= 1.5 + 0.2
+
+
+def test_camera_restart_gives_startup_grace():
+    """Revue #8 : après une reprise de veille, la caméra a de nouveau STARTUP_GRACE pour revenir."""
+    g = started(lock_on_camera_lost=True, camera_lost_delay=2.0)
+    g.on_camera_restart(100.0)
+    for t in (100.5, 103.0, 107.5):
+        v = g.step(obs(t, cam=False))
+        assert v.state == G.STARTING and v.action is None
 
 
 def test_stranger_with_lock_on_stranger_disabled_never_locks():

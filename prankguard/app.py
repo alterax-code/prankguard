@@ -39,6 +39,8 @@ class PrankGuardApp:
         self.engine.on_change = self._on_engine_change
         self.engine.notify = self._notify
         self.events.subscribe(self.server.hub.push_event)
+        self.engine.watcher.on_endsession = self._on_endsession
+        self._quit_done = threading.Event()
 
     # ── Liaisons ──
     def _on_engine_change(self, snap: dict) -> None:
@@ -78,6 +80,7 @@ class PrankGuardApp:
         if self.stopping:
             return True
         self.ui_visible = False
+        self.engine.cancel_enroll()  # un enrôlement ne doit pas survivre à la fenêtre
         self.window.hide()          # fermer = réduire dans la zone de notification
         if not getattr(self, "_hint_shown", False):
             self._hint_shown = True
@@ -111,35 +114,36 @@ class PrankGuardApp:
         self.window.events.closing += self._on_closing
         self.window.events.minimized += lambda: setattr(self, "ui_visible", False)
         self.window.events.restored += lambda: setattr(self, "ui_visible", True)
-        self.window.events.shown += lambda: setattr(self, "ui_visible", True)
         storage = str(paths.HOME / "webview")
         webview.start(gui="edgechromium", debug=self.debug, private_mode=True, storage_path=storage)
         self.quit()
 
+    def _on_endsession(self) -> None:
+        if not self.stopping:
+            threading.Thread(target=self.quit, name="EndSession", daemon=True).start()
+
     def quit(self) -> None:
         if self.stopping:
+            self._quit_done.wait(6)   # un second appel attend la fin du premier
             return
         self.stopping = True
         log.info("Arrêt de PrankGuard")
-        try:
-            self.events.add("system", "info", "PrankGuard arrêté")
-        except Exception:
-            pass
-        self.engine.stop()
-        self.server.stop()
-        if self.tray:
-            self.tray.stop()
-        if self.window:
+        steps = [
+            lambda: self.events.add("system", "info", "PrankGuard arrêté"),
+            self.engine.stop,
+            self.server.stop,
+            lambda: self.tray and self.tray.stop(),
+            lambda: self.window and self.window.destroy(),
+            lambda: paths.INSTANCE_FILE.unlink(missing_ok=True),
+            self.events.close,
+        ]
+        for step in steps:   # chaque étape est isolée : une erreur n'empêche pas les suivantes
             try:
-                self.window.destroy()
+                step()
             except Exception:
-                pass
-        try:
-            paths.INSTANCE_FILE.unlink(missing_ok=True)
-        except OSError:
-            pass
-        self.events.close()
+                log.exception("Erreur pendant l'arrêt")
         self._quit_evt.set()
+        self._quit_done.set()
 
     def _write_instance_file(self) -> None:
         paths.INSTANCE_FILE.write_text(json.dumps({"pid": os.getpid(), "port": self.server.port,

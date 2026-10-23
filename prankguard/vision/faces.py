@@ -157,20 +157,22 @@ class Matcher:
                 mats.append(np.asarray(embs, dtype=np.float32))
                 names += [name] * len(embs)
         labels = np.array(names)
-        self._mat = np.vstack(mats) if mats else np.zeros((0, 128), np.float32)
-        self._groups = [(str(n), np.flatnonzero(labels == n)) for n in dict.fromkeys(names)]
+        mat = np.vstack(mats) if mats else np.zeros((0, 128), np.float32)
+        groups = [(str(n), np.flatnonzero(labels == n)) for n in dict.fromkeys(names)]
+        self._data = (mat, groups)   # une seule affectation : best() ne voit jamais un état mélangé
 
     @property
     def empty(self) -> bool:
-        return len(self._mat) == 0
+        return len(self._data[0]) == 0
 
     def best(self, emb: np.ndarray) -> tuple[str | None, float]:
-        if self.empty:
+        mat, groups = self._data
+        if len(mat) == 0:
             return None, 0.0
-        sims = self._mat @ emb
+        sims = mat @ emb
         # moyenne des 3 meilleurs par personne -> plus stable qu'un max isolé
         best_name, best_sim = None, -1.0
-        for name, idx in self._groups:
+        for name, idx in groups:
             g = sims[idx]
             v = float(np.partition(g, -3)[-3:].mean()) if len(g) >= 3 else float(g.max())
             if v > best_sim:
@@ -215,7 +217,7 @@ class Track:
 
     @property
     def is_spoof(self) -> bool:
-        return self.live is not None and self.live_n >= 2 and self.live < 0.3
+        return self.live is not None and self.live_n >= 3 and self.live < 0.3
 
     def observe_similarity(self, name: str | None, sim: float, threshold: float, now: float) -> None:
         self.last_embed = now

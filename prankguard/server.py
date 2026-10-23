@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import mimetypes
 import secrets
+import select
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -263,6 +265,14 @@ def _make_handler(srv: Server):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _client_gone(self) -> bool:
+            """Vrai si le client a fermé la connexion (lisible + 0 octet en lecture anticipée)."""
+            try:
+                r, _, _ = select.select([self.connection], [], [], 0)
+                return bool(r) and self.connection.recv(1, socket.MSG_PEEK) == b""
+            except OSError:
+                return True
+
         def _json(self, obj, code: int = 200):
             self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
@@ -344,9 +354,13 @@ def _make_handler(srv: Server):
                 while not app.stopping:
                     if not app.ui_visible:
                         time.sleep(0.25)   # fenêtre masquée / réduite : aucun encodage
+                        if self._client_gone():
+                            break
                         continue
                     seq2, jpg = srv.encoder.get(seq)
                     if not jpg:
+                        if self._client_gone():
+                            break
                         continue
                     seq = seq2
                     wait = last + min_dt - time.time()

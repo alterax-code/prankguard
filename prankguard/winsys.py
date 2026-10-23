@@ -105,6 +105,8 @@ WM_DEVICECHANGE = 0x0219
 WM_DISPLAYCHANGE = 0x007E
 WM_POWERBROADCAST = 0x0218
 WM_WTSSESSION_CHANGE = 0x02B1
+WM_QUERYENDSESSION = 0x0011
+WM_ENDSESSION = 0x0016
 DBT_DEVICEARRIVAL = 0x8000
 DBT_DEVICEREMOVECOMPLETE = 0x8004
 DBT_DEVTYP_DEVICEINTERFACE = 5
@@ -290,6 +292,7 @@ class SystemWatcher:
         self.on_session = on_session
         self.on_power = on_power
         self.on_display = on_display
+        self.on_endsession: Callable[[], None] | None = None
         self._hwnd = None
         self._hdev = None
         self._thread: threading.Thread | None = None
@@ -362,6 +365,14 @@ class SystemWatcher:
                     self.on_power("resume")
             elif msg == WM_DISPLAYCHANGE and self.on_display:
                 self.on_display()
+            elif msg == WM_QUERYENDSESSION:
+                # arrêt / déconnexion de Windows : on ne bloque jamais, on se prépare à quitter
+                if self.on_endsession:
+                    self.on_endsession()
+                return 1
+            elif msg == WM_ENDSESSION and wparam and self.on_endsession:
+                self.on_endsession()
+                return 0
             elif msg == WM_CLOSE:
                 if self._hdev:
                     user32.UnregisterDeviceNotification(self._hdev)

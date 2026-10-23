@@ -27,6 +27,7 @@ class Camera:
         self._ts = 0.0
         self._cond = threading.Condition()
         self._want_open = False
+        self._reconfig = False
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.backend = ""
@@ -59,7 +60,7 @@ class Camera:
     def reconfigure(self, index: int, width: int, height: int) -> None:
         if (index, width, height) != (self.index, self.width, self.height):
             self.index, self.width, self.height = index, width, height
-            self._release()
+            self._reconfig = True   # libération faite par le thread caméra, jamais pendant un read()
 
     @property
     def is_open(self) -> bool:
@@ -117,9 +118,11 @@ class Camera:
         fails = 0
         count, t_win = 0, time.time()
         while not self._stop.is_set():
-            if not self._want_open:
+            if not self._want_open or self._reconfig:
+                self._reconfig = False
                 self._release()
-                time.sleep(0.1)
+                if not self._want_open:
+                    time.sleep(0.1)
                 continue
             if self._cap is None:
                 if not self._open():
