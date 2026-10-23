@@ -99,6 +99,7 @@ function connect() {
 function onState(st) {
   const prev = S.state;
   S.state = st;
+  if (prev?.recognizer !== st.recognizer && S.page === "profiles") loadProfiles();
   document.body.dataset.state = st.state;
   const meta = STATES[st.state] || STATES.starting;
   $("#heroKicker").textContent = meta.k;
@@ -319,6 +320,8 @@ $$("[data-snooze]").forEach(b => b.addEventListener("click", () => {
 }));
 
 // ── Profils ─────────────────────────────────────────────────────────────────
+const outdated = p => !!(S.state?.recognizer && p.model && p.model !== S.state.recognizer);
+
 async function loadProfiles() {
   const r = await api("/api/profiles");
   S.profiles = r.profiles;
@@ -335,7 +338,8 @@ async function loadProfiles() {
       <img class="avatar" src="${q("/media/face/" + encodeURIComponent(p.name))}&v=${p.created}" alt="">
       <h3>${esc(p.name)}</h3>
       <div class="meta">${p.samples} échantillons${p.learned ? ` + ${p.learned} appris <button class="link" data-forget="${esc(p.name)}" title="Oublier les vues apprises automatiquement">oublier</button>` : ""} · ${new Date(p.created * 1000).toLocaleDateString("fr-FR")}</div>
-      <button class="btn sm ghost" data-reenroll="${esc(p.name)}">${icon("i-scan")}Réenregistrer</button>`;
+      ${outdated(p) ? `<div class="meta upgrade">Modèle de reconnaissance plus précis disponible</div>` : ""}
+      <button class="btn sm ${outdated(p) ? "primary" : "ghost"}" data-reenroll="${esc(p.name)}">${icon("i-scan")}${outdated(p) ? "Réenregistrer (recommandé)" : "Réenregistrer"}</button>`;
     grid.appendChild(c);
   }
   if (r.profiles.length) {

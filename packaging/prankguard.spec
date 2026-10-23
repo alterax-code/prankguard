@@ -11,7 +11,7 @@ a = Analysis(
         (str(pkg / "web"), "prankguard/web"),
         (str(pkg / "models"), "prankguard/models"),
     ],
-    hiddenimports=["pystray._win32", "webview.platforms.winforms", "webview.platforms.edgechromium"],
+    hiddenimports=["pystray._win32", "webview.platforms.winforms", "webview.platforms.edgechromium", "onnxruntime"],
     excludes=["tkinter", "matplotlib", "pytest", "IPython", "PyQt5", "PySide6", "cefpython3"],
     noarchive=False,
 )

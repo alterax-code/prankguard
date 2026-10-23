@@ -49,7 +49,7 @@ verrouillages, pour tester), `--headless` (sans fenêtre), `--debug`.
 ```
 prankguard/
   vision/camera.py   capture threadée (dernière image uniquement, MSMF ~0,4 s d'ouverture)
-  vision/faces.py    YuNet (détection + 5 points) · SFace (empreinte 128-d) · MiniFASNet (anti-photo)
+  vision/faces.py    YuNet (détection + 5 points) · EdgeFace-XS (512-d) ou SFace (128-d) · MiniFASNet (anti-photo)
                      · orientation de tête · suivi IoU avec vote d'identité à hystérésis
   guard.py           machine de décision pure (aucune I/O, entièrement testée)
   engine.py          orchestration temps réel, cadence adaptative 8/10/15 analyses/s
@@ -67,6 +67,14 @@ Choix techniques mesurés sur la machine de développement :
 - **YuNet + SFace (OpenCV 4.x)** à la place de dlib/face_recognition : plus besoin de compiler dlib,
   détection ~3-5 ms, empreinte ~13-20 ms, séparation nette (même personne ≈ 0,9 ; autre ≈ 0,2).
   OpenCV 5.0 est volontairement exclu (plus lent et instable sur ces modèles).
+- **EdgeFace-XS (onnxruntime)** remplace SFace pour les nouveaux enregistrements : mesuré sur le visage
+  du propriétaire contre ~2 000 visages LFW, 17 ms au lieu de 28 ms et inconnus mieux écartés
+  (p99 0,25 contre 0,34), surtout en faible lumière. Chaque profil garde son modèle (les empreintes
+  128-d et 512-d ne sont jamais comparées entre elles) : un ancien profil SFace reste reconnu, et
+  l'interface propose de le réenregistrer.
+- **Apprentissage continu** : quand vous êtes reconnu avec une bonne marge et un score anti-photo
+  élevé, les vues nouvelles (lumière, lunettes, angle) enrichissent votre profil — toujours comparées
+  à l'enregistrement d'origine pour éviter toute dérive. Bouton « oublier » par profil.
 - La reconnaissance n'est pas recalculée à chaque image : chaque visage suivi est réidentifié toutes
   les 0,25 s (inconnu) ou 0,7 s (reconnu). Résultat : **~5-7 ms par analyse, ~1-2 % de CPU**.
 - **Seuils asymétriques** : reconnu ≥ 42 %, inconnu seulement sous 30 % ; entre les deux, le visage reste
@@ -75,7 +83,8 @@ Choix techniques mesurés sur la machine de développement :
   les 300 ms).
 - Caméra **libérée pendant que la session est verrouillée** (voyant éteint, zéro CPU).
 - Aucun droit administrateur : le blocage USB par registre de la v2 a été retiré (il nécessitait l'UAC
-  et pouvait laisser l'USB désactivé après un plantage) ; le branchement déclenche le verrouillage.
+  et pouvait laisser l'USB désactivé après un plantage). À la place : clavier bloqué pendant la
+  décision (hook bas niveau, 60 s max), puis éjection du périphérique USB refusé et verrouillage.
 
 ## Données
 
@@ -85,10 +94,12 @@ Choix techniques mesurés sur la machine de développement :
 ## Développement
 
 ```bat
-.venv\Scripts\python.exe -m pytest -q      &rem 260 tests, ~3 s
+.venv\Scripts\python.exe -m pytest -q      &rem 357 tests, ~20 s
 build.bat                                  &rem tests + exe PyInstaller + installeur Inno Setup
 ```
 
 Modèles : YuNet et SFace (OpenCV Zoo, MIT / Apache-2.0), MiniFASNet (Silent-Face-Anti-Spoofing,
 conversion ONNX yakhyo/face-anti-spoofing, Apache-2.0). Ils sont vérifiés par SHA-256 et téléchargés
-automatiquement s'ils manquent.
+automatiquement s'ils manquent. EdgeFace-XS (Idiap, CC BY-NC-SA 4.0 — usage personnel / non
+commercial) n'est pas inclus dans l'installeur : il est téléchargé (7 Mo) au premier lancement ;
+sans connexion, PrankGuard reste pleinement fonctionnel avec SFace.
