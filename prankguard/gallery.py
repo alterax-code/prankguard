@@ -49,6 +49,7 @@ class Gallery:
                         self.people[m["name"]] = {
                             "emb": emb,
                             "adapt": adapt,
+                            "model": m.get("model", "sface"),
                             "thumb": bytes(z[f"t{i}"]),
                             "created": m.get("created", 0),
                         }
@@ -60,7 +61,7 @@ class Gallery:
         with self._lock:
             meta, arrays = [], {}
             for i, (name, p) in enumerate(self.people.items()):
-                meta.append({"name": name, "created": p["created"]})
+                meta.append({"name": name, "created": p["created"], "model": p["model"]})
                 arrays[f"e{i}"] = p["emb"]
                 arrays[f"a{i}"] = p["adapt"]
                 arrays[f"t{i}"] = np.frombuffer(p["thumb"], dtype=np.uint8)
@@ -75,20 +76,33 @@ class Gallery:
             tmp.replace(self.path)
 
     # ── API ──
-    def embeddings(self) -> dict[str, np.ndarray]:
-        """Enrôlement + appris : ce que la reconnaissance compare."""
+    def embeddings(self, model: str | None = None) -> dict[str, np.ndarray]:
+        """Enrôlement + appris : ce que la reconnaissance compare (filtré par modèle si demandé)."""
         with self._lock:
-            return {n: np.vstack([p["emb"], p["adapt"]]) for n, p in self.people.items()}
+            return {n: np.vstack([p["emb"], p["adapt"]]) for n, p in self.people.items()
+                    if model is None or p["model"] == model}
 
-    def enrolled(self) -> dict[str, np.ndarray]:
+    def enrolled(self, model: str | None = None) -> dict[str, np.ndarray]:
         """Enrôlement seul : ancre qui empêche l'apprentissage continu de dériver."""
         with self._lock:
-            return {n: p["emb"] for n, p in self.people.items()}
+            return {n: p["emb"] for n, p in self.people.items() if model is None or p["model"] == model}
 
-    def upsert(self, name: str, emb: np.ndarray, thumb: bytes) -> None:
+    def by_model(self, enrolled_only: bool = False) -> dict[str, dict[str, np.ndarray]]:
+        with self._lock:
+            models = {p["model"] for p in self.people.values()}
+            get = self.enrolled if enrolled_only else self.embeddings
+            return {m: get(m) for m in models}
+
+    def model_of(self, name: str) -> str | None:
+        with self._lock:
+            p = self.people.get(name)
+            return p["model"] if p else None
+
+    def upsert(self, name: str, emb: np.ndarray, thumb: bytes, model: str = "sface") -> None:
         emb = np.asarray(emb, np.float32)
         with self._lock:
-            self.people[name] = {"emb": emb, "adapt": emb[:0], "thumb": thumb, "created": time.time()}
+            self.people[name] = {"emb": emb, "adapt": emb[:0], "thumb": thumb, "created": time.time(),
+                                 "model": model}
             self.save()
 
     def add_adaptive(self, name: str, emb: np.ndarray) -> bool:
@@ -133,7 +147,8 @@ class Gallery:
 
     def summary(self) -> list[dict]:
         with self._lock:
-            return [{"name": n, "samples": int(len(p["emb"])), "learned": int(len(p["adapt"])), "created": p["created"]}
+            return [{"name": n, "samples": int(len(p["emb"])), "learned": int(len(p["adapt"])), "created": p["created"],
+                     "model": p["model"]}
                     for n, p in self.people.items()]
 
     def thumb(self, name: str) -> bytes | None:

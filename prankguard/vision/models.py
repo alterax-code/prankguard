@@ -1,7 +1,8 @@
 """Localisation / téléchargement vérifié (SHA-256) des modèles ONNX.
 
 YuNet + SFace : OpenCV Zoo (MIT / Apache-2.0). MiniFASNet : Silent-Face-Anti-Spoofing, conversion
-ONNX de yakhyo/face-anti-spoofing (Apache-2.0).
+ONNX de yakhyo/face-anti-spoofing (Apache-2.0). EdgeFace-XS (Idiap, CC BY-NC-SA 4.0 — usage non
+commercial) : jamais embarqué dans l'installeur, téléchargé au premier lancement et vérifié.
 """
 from __future__ import annotations
 
@@ -36,6 +37,11 @@ FAS_V2 = Model("MiniFASNetV2.onnx", _FAS + "MiniFASNetV2.onnx",
                "b32929adc2d9c34b9486f8c4c7bc97c1b69bc0ea9befefc380e4faae4e463907")
 FAS_V1SE = Model("MiniFASNetV1SE.onnx", _FAS + "MiniFASNetV1SE.onnx",
                  "ebab7f90c7833fbccd46d3a555410e78d969db5438e169b6524be444862b3676")
+# Reconnaissance plus robuste (faible lumière, bruit) et plus rapide que SFace — mesuré sur LFW
+# dégradé : TAR@FAR1% 0,95 contre 0,64 pour SFace dans le noir ; 4 ms contre 11 ms par visage.
+EDGEFACE_XS = Model("edgeface_xs_gamma_06.onnx",
+                    "https://huggingface.co/yakhyo/uniface-weights/resolve/main/edgeface_xs_gamma_06.onnx",
+                    "9206e2eb13a2761d7b5b76e13016d4b9acd3fa3535a9a09939f3adacd139a5ff")
 ALL = (YUNET, SFACE, FAS_V2, FAS_V1SE)
 
 

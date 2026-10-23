@@ -114,7 +114,7 @@ class PrankGuardApp:
             self.ui_visible = False
             self.window.minimize()
         elif action == "quit":
-            threading.Thread(target=self.quit, daemon=True).start()
+            threading.Thread(target=self.quit, args=("bouton Quitter de la fenêtre",), daemon=True).start()
 
     def _on_closing(self):
         if self.stopping:
@@ -141,7 +141,7 @@ class PrankGuardApp:
                     pass
             except KeyboardInterrupt:
                 pass
-            self.quit()
+            self.quit("fin du mode sans interface")
             return
 
         import webview
@@ -156,18 +156,19 @@ class PrankGuardApp:
         self.window.events.restored += lambda: setattr(self, "ui_visible", True)
         storage = str(paths.HOME / "webview")
         webview.start(gui="edgechromium", debug=self.debug, private_mode=True, storage_path=storage)
-        self.quit()
+        self.quit("fenêtre WebView2 fermée ou interrompue")
 
     def _on_endsession(self) -> None:
         if not self.stopping:
-            threading.Thread(target=self.quit, name="EndSession", daemon=True).start()
+            threading.Thread(target=self.quit, args=("arrêt / déconnexion de Windows",), name="EndSession",
+                             daemon=True).start()
 
-    def quit(self) -> None:
+    def quit(self, reason: str = "demande") -> None:
         if self.stopping:
             self._quit_done.wait(6)   # un second appel attend la fin du premier
             return
         self.stopping = True
-        log.info("Arrêt de PrankGuard")
+        log.info("Arrêt de PrankGuard (%s)", reason)
         steps = [
             lambda: self.events.add("system", "info", "PrankGuard arrêté"),
             self.engine.stop,

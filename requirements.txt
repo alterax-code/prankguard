@@ -3,3 +3,4 @@ numpy>=1.26
 pywebview>=6.2,<7
 pystray>=0.19.5
 pillow>=10.0
+onnxruntime>=1.20         # EdgeFace (reconnaissance) — CPU, MIT

@@ -10,6 +10,9 @@ import cv2
 import numpy as np
 
 from . import models
+from ..log import get
+
+log = get("faces")
 
 cv2.setNumThreads(2)        # charge CPU de fond modérée ; YuNet+SFace restent < 15 ms
 
@@ -43,6 +46,26 @@ def head_pose(lm: np.ndarray) -> tuple[float, float]:
     return float(yaw), float(pitch)
 
 
+SFACE = "sface"
+EDGEFACE = "edgeface_xs"
+
+
+class OrtRecognizer:
+    """Modèle de reconnaissance ArcFace-like via onnxruntime (entrée 112x112 RGB, (x-127,5)/127,5)."""
+
+    def __init__(self, path):
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        self._sess = ort.InferenceSession(str(path), opts, providers=["CPUExecutionProvider"])
+        self._input = self._sess.get_inputs()[0].name
+
+    def feature(self, crop_bgr: np.ndarray) -> np.ndarray:
+        x = (cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) - 127.5) / 127.5
+        return self._sess.run(None, {self._input: x.transpose(2, 0, 1)[None]})[0].reshape(-1)
+
+
 class FaceEngine:
     def __init__(self, score_threshold: float = 0.75):
         self._det = cv2.FaceDetectorYN.create(str(models.resolve(models.YUNET)), "", (DETECT_WIDTH, 240),
@@ -50,6 +73,33 @@ class FaceEngine:
         self._rec = cv2.FaceRecognizerSF.create(str(models.resolve(models.SFACE)), "")
         self._det_size = (0, 0)
         self._fas: Liveness | None = None
+        # SFace reste toujours disponible (secours, profils anciens) ; EdgeFace s'y ajoute s'il est là
+        self._extra: dict[str, OrtRecognizer] = {}
+        self.enable(EDGEFACE, download=False)
+
+    def enable(self, name: str, download: bool = True) -> bool:
+        """Charge un modèle supplémentaire (téléchargé et vérifié si besoin). Sans erreur si impossible."""
+        if name in self._extra:
+            return True
+        if name != EDGEFACE:
+            return False
+        try:
+            rec = OrtRecognizer(models.resolve(models.EDGEFACE_XS, allow_download=download))
+        except Exception as e:
+            if download:
+                log.warning("EdgeFace indisponible (%s) — reconnaissance SFace conservée", e)
+            return False
+        self._extra[name] = rec
+        log.info("Reconnaissance EdgeFace-XS prête")
+        return True
+
+    def available(self, model: str) -> bool:
+        return model == SFACE or model in self._extra
+
+    @property
+    def preferred(self) -> str:
+        """Modèle utilisé pour les NOUVEAUX enrôlements."""
+        return EDGEFACE if EDGEFACE in self._extra else SFACE
 
     def detect(self, frame: np.ndarray) -> list[Face]:
         h, w = frame.shape[:2]
@@ -73,9 +123,13 @@ class FaceEngine:
                             yaw=yaw, pitch=pitch, rel_size=float(box[3] / h)))
         return out
 
-    def embed(self, frame: np.ndarray, face: Face) -> np.ndarray:
-        crop = self._rec.alignCrop(frame, face.raw)
-        feat = self._rec.feature(crop).flatten().astype(np.float32)
+    def embed(self, frame: np.ndarray, face: Face, model: str | None = None) -> np.ndarray:
+        crop = self._rec.alignCrop(frame, face.raw)      # même gabarit 5 points ArcFace pour les deux modèles
+        model = model or self.preferred
+        if model == SFACE:
+            feat = self._rec.feature(crop).flatten().astype(np.float32)
+        else:
+            feat = self._extra[model].feature(crop).astype(np.float32)
         n = np.linalg.norm(feat)
         return feat / n if n > 0 else feat
 
@@ -178,6 +232,35 @@ class Matcher:
             if v > best_sim:
                 best_name, best_sim = name, v
         return best_name, best_sim
+
+
+class ProfileMatcher:
+    """Profils enrôlés avec des modèles différents : on ne compare jamais deux espaces d'embeddings."""
+
+    def __init__(self, galleries: dict[str, dict[str, np.ndarray]] | None = None):
+        self.set_galleries(galleries or {})
+
+    def set_galleries(self, galleries: dict[str, dict[str, np.ndarray]]) -> None:
+        self._by_model = {m: Matcher(g) for m, g in galleries.items()}   # une seule affectation
+
+    @property
+    def models(self) -> list[str]:
+        return [m for m, mt in self._by_model.items() if not mt.empty]
+
+    @property
+    def empty(self) -> bool:
+        return not self.models
+
+    def best(self, embs: dict[str, np.ndarray]) -> tuple[str | None, float, str | None]:
+        name, sim, model = None, 0.0, None
+        for m, e in embs.items():
+            mt = self._by_model.get(m)
+            if mt is None or mt.empty:
+                continue
+            n, s = mt.best(e)
+            if n is not None and (model is None or s > sim):
+                name, sim, model = n, s, m
+        return name, sim, model
 
 
 # ── Suivi ────────────────────────────────────────────────────────────────────

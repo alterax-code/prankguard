@@ -88,7 +88,7 @@ def test_looking_face_is_always_analysed(eng, monkeypatch):
                 score=0.9, raw=np.zeros(15, np.float32), yaw=0.0, pitch=0.0, rel_size=0.075)
     eng.config.update({"min_face_size": 0.05, "anti_spoof": False})
     monkeypatch.setattr(eng.faces, "detect", lambda frame: [face])
-    monkeypatch.setattr(eng.faces, "embed", lambda frame, f: -np.eye(128, dtype=np.float32)[0])
+    monkeypatch.setattr(eng.faces, "embed", lambda frame, f, m=None: -np.eye(128, dtype=np.float32)[0])
     assert not eng.faces.embeddable(face)
     frame = np.full((480, 640, 3), 120, np.uint8)
     t = time.time()
@@ -321,7 +321,7 @@ def test_learning_can_be_disabled(eng, learner, monkeypatch):
     face = Face(box=np.array([200, 100, 200, 240], np.float32), landmarks=np.zeros((5, 2), np.float32),
                 score=0.9, raw=np.zeros(15, np.float32), yaw=0.0, pitch=0.0, rel_size=0.5)
     monkeypatch.setattr(eng.faces, "detect", lambda f: [face])
-    monkeypatch.setattr(eng.faces, "embed", lambda f, x: _unit((0, 1)))
+    monkeypatch.setattr(eng.faces, "embed", lambda f, x, m=None: _unit((0, 1)))
     eng._analyze(frame + 100, 1000.0)
     assert called == []
 
@@ -371,3 +371,20 @@ def test_does_not_learn_a_view_already_well_recognised(eng, learner):
     eng.gallery.add_adaptive("alice", _unit((0, .8), (5, .6)))
     eng.reload_gallery()
     assert not eng._maybe_learn(learner, _unit((0, .8), (5, .6), (8, .05)), 1000.0)
+
+
+def test_enrollment_model_is_frozen_and_stored(eng, monkeypatch):
+    from prankguard.vision import faces as F
+    monkeypatch.setattr(F.FaceEngine, "preferred", property(lambda self: "edgeface_xs"))
+    eng.start_enroll("bob")
+    assert eng._enroll.model == "edgeface_xs"
+    eng._enroll.embs = list(np.eye(512, dtype=np.float32)[:5])
+    assert eng.finish_enroll()["ok"]
+    assert eng.gallery.model_of("bob") == "edgeface_xs"
+
+
+def test_profile_with_unavailable_model_is_not_matched(eng, monkeypatch):
+    eng.gallery.upsert("bob", np.eye(512, dtype=np.float32)[:3], b"", model="edgeface_xs")
+    eng.reload_gallery()
+    monkeypatch.setattr(eng.faces, "available", lambda m: m == "sface")
+    assert eng._usable_models() == ["sface"]          # alice (SFace) reste reconnue, bob attend son modèle

@@ -87,3 +87,28 @@ def test_aligned_crop_and_embeddable(engine, lena):
     crop = engine.aligned_crop(lena, f)
     assert crop.shape == (112, 112, 3)
     assert engine.embeddable(f)
+
+
+def _edgeface_path():
+    import os
+    for d in (os.path.expandvars(r"%APPDATA%\PrankGuard\v3\models"), os.path.expandvars(r"%TEMP%\pg_research_models")):
+        p = os.path.join(d, "edgeface_xs_gamma_06.onnx")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+@pytest.mark.skipif(_edgeface_path() is None, reason="EdgeFace non téléchargé sur cette machine")
+def test_edgeface_separates_people_and_is_stable(engine, assets_dir):
+    from prankguard.vision.faces import OrtRecognizer
+    rec = OrtRecognizer(_edgeface_path())
+    lena, messi = (cv2.imread(str(assets_dir / f)) for f in ("lena.jpg", "messi5.jpg"))
+
+    def emb(img):
+        f = only_face(engine, img)
+        v = rec.feature(engine.aligned_crop(img, f))
+        return v / np.linalg.norm(v)
+    a, b = emb(lena), emb(messi)
+    a2 = emb(cv2.convertScaleAbs(lena, alpha=0.8, beta=10))            # même personne, autre exposition
+    assert a.shape == (512,)
+    assert float(a @ a2) > 0.8 and float(a @ b) < 0.3

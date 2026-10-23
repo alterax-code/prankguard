@@ -106,7 +106,7 @@ class FakeEngine:
     def aligned_crop(self, frame, face):
         return self.crop
 
-    def embed(self, frame, face):
+    def embed(self, frame, face, model=None):
         self.n += 1
         v = np.zeros(128, np.float32)
         v[self.n % 128] = 1.0

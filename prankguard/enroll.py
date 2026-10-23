@@ -56,6 +56,7 @@ def pose_gauge(target: str | None, yaw: float, pitch: float) -> float | None:
 @dataclass
 class EnrollSession:
     name: str
+    model: str | None = None          # figé au début : tous les échantillons d'un profil viennent du même modèle
     started: float = field(default_factory=time.time)
     counts: dict = field(default_factory=lambda: {k: 0 for k in TARGETS})
     embs: list = field(default_factory=list)
@@ -143,7 +144,7 @@ class EnrollSession:
         if sh < MIN_SHARPNESS:
             self.hint = "Image floue — restez immobile un instant"
             return False
-        emb = engine.embed(frame, f)
+        emb = engine.embed(frame, f, self.model)
         self.embs.append(emb)
         self.counts[wanted] += 1
         self.last_capture = now

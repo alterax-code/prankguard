@@ -19,7 +19,7 @@ from .events import EventStore
 from .gallery import Gallery
 from .log import get
 from .vision.camera import Camera
-from .vision.faces import FaceEngine, Matcher, Track, Tracker
+from .vision.faces import EDGEFACE, FaceEngine, ProfileMatcher, Track, Tracker
 
 log = get("engine")
 
@@ -66,11 +66,12 @@ class Engine:
         self.camera = Camera(s.camera_index, s.camera_width, s.camera_height)
         self.faces = FaceEngine()
         self.tracker = Tracker()
-        self.matcher = Matcher(gallery.embeddings())
-        self.anchor = Matcher(gallery.enrolled())
+        self.matcher = ProfileMatcher()
+        self.anchor = ProfileMatcher()
+        self._set_matchers()
         self._last_learn = 0.0
         self.guard = G.Guard(s)
-        self.guard.enrolled = not self.matcher.empty
+        self.guard.enrolled = bool(self._usable_models())
         self.dry_run = dry_run
         if dry_run:
             log.warning("MODE TEST (--dry-run) : LockWorkStation ne sera jamais appelé")
@@ -120,6 +121,11 @@ class Engine:
         self.watcher.start()
         self._thread = threading.Thread(target=self._loop, name="Engine", daemon=True)
         self._thread.start()
+        if not self.faces.available(EDGEFACE):
+            threading.Thread(target=self._fetch_better_model, name="ModelFetch", daemon=True).start()
+        missing = [m for m in self.matcher.models if not self.faces.available(m)]
+        if missing:
+            log.warning("Profil(s) enregistré(s) avec un modèle absent (%s) : téléchargement en cours", missing)
         self.events.add("system", "info", "Surveillance démarrée",
                         "Armée" if self.guard.armed else "En pause")
 
@@ -163,19 +169,31 @@ class Engine:
             return
         self._do_lock(reason, None, manual=True)
 
+    def _set_matchers(self) -> None:
+        self.matcher.set_galleries(self.gallery.by_model())
+        self.anchor.set_galleries(self.gallery.by_model(enrolled_only=True))
+
+    def _usable_models(self) -> list[str]:
+        return [m for m in self.matcher.models if self.faces.available(m)]
+
+    def _fetch_better_model(self) -> None:
+        """Arrière-plan : télécharge EdgeFace une seule fois ; les prochains enrôlements l'utiliseront."""
+        if self.faces.enable(EDGEFACE, download=True):
+            self.reload_gallery()       # un profil EdgeFace devenu utilisable
+            self._publish(force=True)
+
     def reload_gallery(self) -> None:
-        self.matcher.set_gallery(self.gallery.embeddings())
-        self.anchor.set_gallery(self.gallery.enrolled())
+        self._set_matchers()
         with self._lock:
             was = self.guard.enrolled
-            self.guard.enrolled = not self.matcher.empty
+            self.guard.enrolled = bool(self._usable_models())
             if self.guard.enrolled and not was and self.guard.armed:
                 self.guard.arm(time.time())   # premier profil : on repart d'un état propre
             self._reset_tracks = True
 
     def start_enroll(self, name: str) -> None:
         with self._lock:
-            self._enroll = EnrollSession(name=name)
+            self._enroll = EnrollSession(name=name, model=self.faces.preferred)
             if not self.camera.is_open:
                 self.camera.resume()
         self._publish(force=True)
@@ -188,7 +206,7 @@ class Engine:
             return {"ok": False, "error": "Pas assez d'échantillons"}
         emb = sess.result()
         first = not any(n != sess.name for n in self.gallery.people)
-        self.gallery.upsert(sess.name, emb, sess.best_thumb)
+        self.gallery.upsert(sess.name, emb, sess.best_thumb, model=sess.model or self.faces.preferred)
         if sess.base_yaw is not None and first:
             # la position de la caméra par rapport à l'écran vient d'être mesurée
             self.config.update({"gaze_yaw": round(sess.base_yaw, 3), "gaze_pitch": round(sess.base_pitch, 3)})
@@ -307,11 +325,11 @@ class Engine:
                     t.last_embed = now
                     t.status = "spoof" if t.is_spoof else ("unknown" if t.hits >= 2 else "pending")
                 else:
-                    emb = self.faces.embed(frame, t.face)
-                    name, sim = self.matcher.best(emb)
+                    embs = {m: self.faces.embed(frame, t.face, m) for m in self._usable_models()}
+                    name, sim, model = self.matcher.best(embs)
                     t.observe_similarity(name, sim, s.match_threshold, now)
-                    if s.adaptive_learning and len(tracks) == 1:
-                        self._maybe_learn(t, emb, now)
+                    if s.adaptive_learning and len(tracks) == 1 and model:
+                        self._maybe_learn(t, embs[model], now)
                 embeds += 1
             except Exception:
                 # une erreur d'un modèle ne doit jamais empêcher la décision de tourner
@@ -333,17 +351,20 @@ class Engine:
             return False
         if not self.faces.embeddable(t.face):
             return False
-        anchor_name, anchor_sim = self.anchor.best(emb)
+        model = self.gallery.model_of(t.name)
+        if model is None:
+            return False
+        anchor_name, anchor_sim, _ = self.anchor.best({model: emb})
         if anchor_name != t.name or anchor_sim < s.match_threshold + LEARN_ANCHOR_MARGIN:
             return False
-        if self.matcher.best(emb)[1] >= LEARN_IF_BELOW:
+        if self.matcher.best({model: emb})[1] >= LEARN_IF_BELOW:
             return False
-        known = self.gallery.embeddings().get(t.name)
+        known = self.gallery.embeddings(model).get(t.name)
         if known is None or (len(known) and float((known @ emb).max()) >= LEARN_NOVELTY):
             return False
         self._last_learn = now
         if self.gallery.add_adaptive(t.name, emb):
-            self.matcher.set_gallery(self.gallery.embeddings())
+            self._set_matchers()
             log.info("Profil %s enrichi (vue nouvelle, similarité d'ancrage %.2f)", t.name, anchor_sim)
             return True
         return False
@@ -672,6 +693,7 @@ class Engine:
             "enroll": self._enroll.progress() if self._enroll else None,
             "profiles": len(self.gallery.people),
             "dry_run": self.dry_run,
+            "recognizer": self.faces.preferred,
             "device_prompt": self.prompt_info(),
         }
 

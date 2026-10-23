@@ -296,3 +296,16 @@ def test_recognised_owner_dipping_below_threshold_stays_pending():
     for i in range(10):
         t.observe_similarity("alice", 0.36, 0.42, 1.0 + i)
     assert t.status in ("known", "pending")
+
+
+def test_profile_matcher_never_mixes_embedding_spaces():
+    from prankguard.vision.faces import ProfileMatcher
+    s128 = np.eye(128, dtype=np.float32)
+    s512 = np.eye(512, dtype=np.float32)
+    pm = ProfileMatcher({"sface": {"alice": s128[:3]}, "edgeface_xs": {"bob": s512[10:13]}})
+    assert sorted(pm.models) == ["edgeface_xs", "sface"] and not pm.empty
+    assert pm.best({"edgeface_xs": s512[10]})[::2] == ("bob", "edgeface_xs")
+    name, sim, model = pm.best({"sface": s128[0], "edgeface_xs": -s512[10]})
+    assert (name, model) == ("alice", "sface")
+    assert pm.best({"autre": s128[0]}) == (None, 0.0, None)
+    assert ProfileMatcher().empty

@@ -59,7 +59,7 @@ def test_summary(path, encrypt):
     g = Gallery(path, encrypt=encrypt)
     g.upsert("alice", embs(1, 5), THUMB)
     s = g.summary()
-    assert s == [{"name": "alice", "samples": 5, "learned": 0, "created": g.people["alice"]["created"]}]
+    assert s == [{"name": "alice", "samples": 5, "learned": 0, "created": g.people["alice"]["created"], "model": "sface"}]
 
 
 def test_rename(path, encrypt):
@@ -183,3 +183,15 @@ def test_full_learning_drops_most_redundant_view(path, monkeypatch):
     kept = g.people["alice"]["adapt"]
     assert len(kept) == 3
     assert any(np.allclose(k, e[1]) for k in kept) and np.allclose(kept[-1], e[2])
+
+
+def test_profile_model_is_persisted_and_filters_embeddings(path, encrypt):
+    g = Gallery(path, encrypt=encrypt)
+    g.upsert("alice", embs(1, 4), THUMB)                              # ancien profil SFace
+    g.upsert("bob", np.ones((3, 512), np.float32) / np.sqrt(512), THUMB, model="edgeface_xs")
+    g2 = Gallery(path, encrypt=encrypt)
+    assert g2.model_of("alice") == "sface" and g2.model_of("bob") == "edgeface_xs"
+    by = g2.by_model()
+    assert set(by) == {"sface", "edgeface_xs"}
+    assert list(by["sface"]) == ["alice"] and by["edgeface_xs"]["bob"].shape == (3, 512)
+    assert g2.model_of("inconnu") is None

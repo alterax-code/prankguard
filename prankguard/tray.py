@@ -53,7 +53,7 @@ class Tray:
             )),
             pystray.MenuItem("Verrouiller maintenant", lambda: app.engine.lock_now()),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quitter", lambda: app.quit()),
+            pystray.MenuItem("Quitter", lambda: app.quit("menu Quitter de la zone de notification")),
         )
         self.icon = pystray.Icon("PrankGuard", self._icons[G.STARTING], "PrankGuard", menu)
 
