@@ -1,51 +1,28 @@
 @echo off
+setlocal
+cd /d "%~dp0"
 echo ============================================
-echo   PrankGuard - Setup
+echo   PrankGuard v3 - installation
 echo ============================================
-echo.
 
-python --version >nul 2>&1
+where py >nul 2>&1 && (set "PY=py -3.12") || (set "PY=python")
+%PY% --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python non trouvé ! Installez Python 3.12 d'abord.
-    pause
-    exit /b 1
+    echo [ERREUR] Python 3.11+ introuvable. Installez-le depuis python.org.
+    pause & exit /b 1
 )
 
-echo [1/3] Création de l'environnement virtuel...
-python -m venv venv312
-if errorlevel 1 (
-    echo [ERROR] Échec de la création du venv
-    pause
-    exit /b 1
+if not exist ".venv\Scripts\python.exe" (
+    echo [1/3] Creation de l'environnement virtuel...
+    %PY% -m venv .venv || (echo [ERREUR] venv & pause & exit /b 1)
 )
+echo [2/3] Installation des dependances...
+".venv\Scripts\python.exe" -m pip install --upgrade pip >nul
+".venv\Scripts\python.exe" -m pip install -r requirements.txt || (echo [ERREUR] pip & pause & exit /b 1)
 
-echo [2/3] Activation du venv...
-call venv312\Scripts\activate.bat
-
-echo [3/3] Installation des dépendances...
-echo Cela peut prendre quelques minutes (compilation de dlib)...
-pip install --upgrade pip
-pip install -r requirements.txt
-
-if errorlevel 1 (
-    echo.
-    echo [ERROR] L'installation a échoué !
-    echo.
-    echo Si dlib échoue, essayez :
-    echo   1. Installer Visual Studio Build Tools
-    echo   2. Ou : pip install dlib-bin
-    echo.
-    pause
-    exit /b 1
-)
+echo [3/3] Verification des modeles...
+".venv\Scripts\python.exe" -c "from prankguard.vision import models as m; [print('  ok', x.filename) for x in m.ALL if m.resolve(x)]" || (echo [ERREUR] modeles & pause & exit /b 1)
 
 echo.
-echo ============================================
-echo   Setup terminé !
-echo ============================================
-echo.
-echo Prochaines étapes :
-echo   1. Exécutez : enroll.bat    (enregistrer votre visage)
-echo   2. Exécutez : run.bat       (démarrer la surveillance)
-echo.
+echo Termine. Lancez run.bat
 pause

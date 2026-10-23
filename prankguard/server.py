@@ -342,6 +342,9 @@ def _make_handler(srv: Server):
             seq, min_dt, last = -1, 1.0 / STREAM_MAX_FPS, 0.0
             try:
                 while not app.stopping:
+                    if not app.ui_visible:
+                        time.sleep(0.25)   # fenêtre masquée / réduite : aucun encodage
+                        continue
                     seq2, jpg = srv.encoder.get(seq)
                     if not jpg:
                         continue

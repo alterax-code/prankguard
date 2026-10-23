@@ -82,14 +82,16 @@ class Camera:
 
     # ── Interne ──
     def _open(self) -> bool:
-        backends = [(cv2.CAP_DSHOW, "DSHOW"), (cv2.CAP_MSMF, "MSMF")]
+        # MSMF (HW transforms off) : ~0,4 s d'ouverture contre ~1,3 s pour DSHOW, même cadence
+        backends = [(cv2.CAP_MSMF, "MSMF"), (cv2.CAP_DSHOW, "DSHOW")]
         for api, name in backends:
             t0 = time.perf_counter()
             cap = cv2.VideoCapture(self.index, api)
             if not cap.isOpened():
                 cap.release()
                 continue
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            if api == cv2.CAP_DSHOW:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.fps)

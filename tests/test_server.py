@@ -66,6 +66,7 @@ class FakeApp:
         self.events = EventStore(base / "ev.sqlite3", base / "snaps")
         self.gallery = Gallery(base / "faces.bin", encrypt=False)
         self.stopping = False
+        self.ui_visible = True
         self.debug = False
         self.windows = []
 

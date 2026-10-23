@@ -1,8 +1,28 @@
 [project]
 name = "prankguard"
-version = "1.0.0"
-description = "Webcam-based intruder detection and screen lock for EPITECH pranks"
-requires-python = ">=3.10"
+version = "3.0.0"
+description = "Garde du poste Windows : verrouille la session quand un inconnu regarde l'écran"
+requires-python = ">=3.11"
+dependencies = [
+  "opencv-python>=4.12,<5",
+  "numpy>=1.26",
+  "pywebview>=6.2,<7",
+  "pystray>=0.19.5",
+  "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.gui-scripts]
+prankguard = "prankguard.__main__:main"
 
 [tool.setuptools]
-packages = ["src"]
+packages = ["prankguard", "prankguard.vision"]
+
+[tool.setuptools.package-data]
+prankguard = ["web/*", "models/*.onnx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

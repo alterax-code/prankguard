@@ -21,7 +21,8 @@ from .vision.faces import FaceEngine, Matcher, Track, Tracker
 
 log = get("engine")
 
-ACTIVE_INTERVAL = 1 / 15     # cadence d'analyse quand il y a des visages
+ACTIVE_INTERVAL = 1 / 15     # cadence d'analyse : visage inconnu / en cours d'identification / alerte
+OWNER_INTERVAL = 1 / 10      # seul(s) des profils reconnus devant l'écran
 IDLE_INTERVAL = 1 / 8        # cadence quand la scène est vide (économie CPU)
 REVERIFY_KNOWN = 0.7         # ré-identification périodique d'un visage reconnu
 REVERIFY_OTHER = 0.25        # identification rapide des visages inconnus / en attente
@@ -170,8 +171,13 @@ class Engine:
                     time.sleep(0.2)
                     continue
 
-                busy = bool(self._tracks) or self._verdict.state in (G.ALERT, G.SURFER) or self._enroll
-                interval = ACTIVE_INTERVAL if busy else IDLE_INTERVAL
+                if (self._enroll or self._verdict.state in (G.ALERT, G.SURFER)
+                        or any(t.status != "known" for t in self._tracks)):
+                    interval = ACTIVE_INTERVAL
+                elif self._tracks:
+                    interval = OWNER_INTERVAL
+                else:
+                    interval = IDLE_INTERVAL
                 wait = last_analysis + interval - time.time()
                 if wait > 0:
                     time.sleep(wait)

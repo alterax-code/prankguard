@@ -36,7 +36,7 @@ intrusion_log.txt
 
 # PyInstaller / Inno Setup
 *.spec
-!build_lite.spec
+!packaging/prankguard.spec
 output/
 
 # Env

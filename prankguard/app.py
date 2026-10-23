@@ -26,6 +26,7 @@ class PrankGuardApp:
         self.debug = debug
         self.stopping = False
         self.window = None
+        self.ui_visible = True
         paths.ensure_dirs()
         self.config = ConfigStore()
         self.gallery = Gallery()
@@ -55,6 +56,7 @@ class PrankGuardApp:
             try:
                 self.window.show()
                 self.window.restore()
+                self.ui_visible = True
             except Exception:
                 pass
 
@@ -64,8 +66,10 @@ class PrankGuardApp:
         if action == "show":
             self.show_window()
         elif action == "hide":
+            self.ui_visible = False
             self.window.hide()
         elif action == "minimize":
+            self.ui_visible = False
             self.window.minimize()
         elif action == "quit":
             threading.Thread(target=self.quit, daemon=True).start()
@@ -73,6 +77,7 @@ class PrankGuardApp:
     def _on_closing(self):
         if self.stopping:
             return True
+        self.ui_visible = False
         self.window.hide()          # fermer = réduire dans la zone de notification
         if not getattr(self, "_hint_shown", False):
             self._hint_shown = True
@@ -102,7 +107,11 @@ class PrankGuardApp:
         self.window = webview.create_window(
             APP_NAME, self.server.url, width=1240, height=820, min_size=(980, 660),
             background_color="#0b0e14", hidden=hidden, text_select=False)
+        self.ui_visible = not hidden
         self.window.events.closing += self._on_closing
+        self.window.events.minimized += lambda: setattr(self, "ui_visible", False)
+        self.window.events.restored += lambda: setattr(self, "ui_visible", True)
+        self.window.events.shown += lambda: setattr(self, "ui_visible", True)
         storage = str(paths.HOME / "webview")
         webview.start(gui="edgechromium", debug=self.debug, private_mode=True, storage_path=storage)
         self.quit()
