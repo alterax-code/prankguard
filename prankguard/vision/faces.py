@@ -1,0 +1,266 @@
+"""Détection (YuNet) + reconnaissance (SFace) + orientation de tête + suivi multi-visages."""
+from __future__ import annotations
+
+import itertools
+import time
+from collections import deque
+from dataclasses import dataclass, field
+
+import cv2
+import numpy as np
+
+from . import models
+
+cv2.setNumThreads(2)        # charge CPU de fond modérée ; YuNet+SFace restent < 15 ms
+
+DETECT_WIDTH = 320          # YuNet tourne sur une image réduite : ~2-4 ms CPU
+MIN_EMBED_PX = 48           # visage trop petit -> embedding peu fiable, on ne tente pas
+MAX_EMBED_YAW = 0.75        # profil trop marqué -> embedding peu fiable
+
+
+@dataclass
+class Face:
+    box: np.ndarray          # x, y, w, h (pixels image complète)
+    landmarks: np.ndarray    # 5x2 : oeil droit, oeil gauche, nez, coin bouche droit, coin bouche gauche
+    score: float
+    raw: np.ndarray          # ligne YuNet (15 valeurs) à l'échelle de l'image complète, pour alignCrop
+    yaw: float = 0.0         # -1 (gauche) .. 0 (face) .. 1 (droite), au-delà = profil
+    pitch: float = 0.0       # ~0 = face, >0 tête baissée, <0 tête levée
+    rel_size: float = 0.0    # hauteur visage / hauteur image
+
+
+def head_pose(lm: np.ndarray) -> tuple[float, float]:
+    """Orientation approximative à partir des 5 points YuNet (robuste, sans solvePnP)."""
+    re, le, nose, rm, lmo = lm
+    ex = le[0] - re[0]
+    if abs(ex) < 1e-3:
+        return 1.0, 0.0
+    yaw = ((nose[0] - re[0]) / ex - 0.5) * 2.0
+    eye_y = (re[1] + le[1]) / 2.0
+    mouth_y = (rm[1] + lmo[1]) / 2.0
+    span = mouth_y - eye_y
+    pitch = ((nose[1] - eye_y) / span - 0.55) * 2.0 if span > 1e-3 else 0.0
+    return float(yaw), float(pitch)
+
+
+class FaceEngine:
+    def __init__(self, score_threshold: float = 0.75):
+        self._det = cv2.FaceDetectorYN.create(str(models.resolve(models.YUNET)), "", (DETECT_WIDTH, 240),
+                                              score_threshold, 0.3, 50)
+        self._rec = cv2.FaceRecognizerSF.create(str(models.resolve(models.SFACE)), "")
+        self._det_size = (0, 0)
+        self._fas: Liveness | None = None
+
+    def detect(self, frame: np.ndarray) -> list[Face]:
+        h, w = frame.shape[:2]
+        s = DETECT_WIDTH / w
+        dw, dh = DETECT_WIDTH, int(round(h * s))
+        small = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
+        if (dw, dh) != self._det_size:
+            self._det.setInputSize((dw, dh))
+            self._det_size = (dw, dh)
+        _, dets = self._det.detect(small)
+        out: list[Face] = []
+        if dets is None:
+            return out
+        for d in dets:
+            raw = d.copy()
+            raw[:14] /= s
+            box = raw[:4].copy()
+            lm = raw[4:14].reshape(5, 2).copy()
+            yaw, pitch = head_pose(lm)
+            out.append(Face(box=box, landmarks=lm, score=float(d[14]), raw=raw,
+                            yaw=yaw, pitch=pitch, rel_size=float(box[3] / h)))
+        return out
+
+    def embed(self, frame: np.ndarray, face: Face) -> np.ndarray:
+        crop = self._rec.alignCrop(frame, face.raw)
+        feat = self._rec.feature(crop).flatten().astype(np.float32)
+        n = np.linalg.norm(feat)
+        return feat / n if n > 0 else feat
+
+    def aligned_crop(self, frame: np.ndarray, face: Face) -> np.ndarray:
+        return self._rec.alignCrop(frame, face.raw)
+
+    def liveness(self, frame: np.ndarray, face: Face) -> float:
+        """Probabilité qu'il s'agisse d'un vrai visage (vs photo / écran). Chargé à la demande."""
+        if self._fas is None:
+            self._fas = Liveness()
+        return self._fas.score(frame, face.box)
+
+    @staticmethod
+    def embeddable(face: Face) -> bool:
+        return face.box[3] >= MIN_EMBED_PX and abs(face.yaw) <= MAX_EMBED_YAW
+
+
+class Liveness:
+    """Anti-spoofing passif MiniFASNet (ensemble V2 @2.7 + V1SE @4.0), entrée 80x80 BGR brute."""
+
+    def __init__(self):
+        self._nets = [(cv2.dnn.readNetFromONNX(str(models.resolve(models.FAS_V2))), 2.7),
+                      (cv2.dnn.readNetFromONNX(str(models.resolve(models.FAS_V1SE))), 4.0)]
+
+    @staticmethod
+    def _crop(frame: np.ndarray, box: np.ndarray, scale: float) -> np.ndarray:
+        H, W = frame.shape[:2]
+        x, y, w, h = (float(v) for v in box)
+        scale = min((H - 1) / max(h, 1), (W - 1) / max(w, 1), scale)
+        nw, nh = w * scale, h * scale
+        cx, cy = x + w / 2, y + h / 2
+        x1, y1 = cx - nw / 2, cy - nh / 2
+        x2, y2 = cx + nw / 2, cy + nh / 2
+        # on décale la boîte pour rester dans l'image (sans la rétrécir)
+        if x1 < 0:
+            x2 -= x1
+            x1 = 0
+        if y1 < 0:
+            y2 -= y1
+            y1 = 0
+        if x2 > W - 1:
+            x1 -= x2 - W + 1
+            x2 = W - 1
+        if y2 > H - 1:
+            y1 -= y2 - H + 1
+            y2 = H - 1
+        crop = frame[int(max(0, y1)):int(y2) + 1, int(max(0, x1)):int(x2) + 1]
+        return cv2.resize(crop, (80, 80))
+
+    def score(self, frame: np.ndarray, box: np.ndarray) -> float:
+        probs = []
+        for net, sc in self._nets:
+            blob = self._crop(frame, box, sc).astype(np.float32).transpose(2, 0, 1)[None]
+            net.setInput(blob)
+            logits = net.forward()[0].astype(np.float64)
+            e = np.exp(logits - logits.max())
+            probs.append(e / e.sum())
+        return float(np.mean(probs, axis=0)[1])
+
+
+def sharpness(img: np.ndarray) -> float:
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    return float(cv2.Laplacian(g, cv2.CV_64F).var())
+
+
+# ── Galerie en mémoire (matching vectorisé) ──────────────────────────────────
+
+
+class Matcher:
+    """Similarité cosinus contre tous les embeddings enrôlés en une multiplication matricielle."""
+
+    def __init__(self, gallery: dict[str, np.ndarray] | None = None):
+        self.set_gallery(gallery or {})
+
+    def set_gallery(self, gallery: dict[str, np.ndarray]) -> None:
+        names, mats = [], []
+        for name, embs in gallery.items():
+            if len(embs):
+                mats.append(np.asarray(embs, dtype=np.float32))
+                names += [name] * len(embs)
+        labels = np.array(names)
+        self._mat = np.vstack(mats) if mats else np.zeros((0, 128), np.float32)
+        self._groups = [(str(n), np.flatnonzero(labels == n)) for n in dict.fromkeys(names)]
+
+    @property
+    def empty(self) -> bool:
+        return len(self._mat) == 0
+
+    def best(self, emb: np.ndarray) -> tuple[str | None, float]:
+        if self.empty:
+            return None, 0.0
+        sims = self._mat @ emb
+        # moyenne des 3 meilleurs par personne -> plus stable qu'un max isolé
+        best_name, best_sim = None, -1.0
+        for name, idx in self._groups:
+            g = sims[idx]
+            v = float(np.partition(g, -3)[-3:].mean()) if len(g) >= 3 else float(g.max())
+            if v > best_sim:
+                best_name, best_sim = name, v
+        return best_name, best_sim
+
+
+# ── Suivi ────────────────────────────────────────────────────────────────────
+
+_ids = itertools.count(1)
+
+
+def iou(a: np.ndarray, b: np.ndarray) -> float:
+    ax2, ay2, bx2, by2 = a[0] + a[2], a[1] + a[3], b[0] + b[2], b[1] + b[3]
+    iw = max(0.0, min(ax2, bx2) - max(a[0], b[0]))
+    ih = max(0.0, min(ay2, by2) - max(a[1], b[1]))
+    inter = iw * ih
+    union = a[2] * a[3] + b[2] * b[3] - inter
+    return inter / union if union > 0 else 0.0
+
+
+@dataclass
+class Track:
+    face: Face
+    id: int = field(default_factory=lambda: next(_ids))
+    first_seen: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
+    last_embed: float = 0.0
+    sims: deque = field(default_factory=lambda: deque(maxlen=6))
+    ema: float | None = None
+    name: str | None = None
+    status: str = "pending"   # pending | known | unknown | spoof
+    hits: int = 1
+    live: float | None = None  # EMA de la probabilité "visage réel"
+    live_n: int = 0
+
+    UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
+
+    def observe_liveness(self, p_real: float) -> None:
+        self.live = p_real if self.live is None else 0.5 * p_real + 0.5 * self.live
+        self.live_n += 1
+
+    @property
+    def is_spoof(self) -> bool:
+        return self.live is not None and self.live_n >= 2 and self.live < 0.3
+
+    def observe_similarity(self, name: str | None, sim: float, threshold: float, now: float) -> None:
+        self.last_embed = now
+        self.sims.append(sim)
+        self.ema = sim if self.ema is None else 0.55 * sim + 0.45 * self.ema
+        n = len(self.sims)
+        if self.is_spoof:
+            self.status, self.name = "spoof", None
+            return
+        if self.ema >= threshold and name:
+            # reconnu : immédiat si très net, sinon après 2 observations
+            if sim >= threshold + 0.08 or n >= 2:
+                self.status, self.name = "known", name
+        elif self.ema < threshold - self.UNKNOWN_GAP:
+            if self.status == "known" and n < 4:
+                return  # hystérésis : un raté isolé ne fait pas basculer un propriétaire
+            if n >= 2:
+                self.status, self.name = "unknown", None
+        elif self.status == "unknown" and self.ema >= threshold - self.UNKNOWN_GAP / 2:
+            self.status = "pending"   # zone d'incertitude : ni propriétaire, ni menace
+
+
+class Tracker:
+    def __init__(self, max_age: float = 0.8):
+        self.max_age = max_age
+        self.tracks: list[Track] = []
+
+    def update(self, faces: list[Face], now: float) -> list[Track]:
+        unmatched = list(range(len(faces)))
+        pairs = sorted(((iou(t.face.box, faces[j].box), i, j)
+                        for i, t in enumerate(self.tracks) for j in unmatched), reverse=True)
+        used_t, used_f = set(), set()
+        for score, i, j in pairs:
+            if score < 0.25 or i in used_t or j in used_f:
+                continue
+            t = self.tracks[i]
+            t.face, t.last_seen = faces[j], now
+            t.hits += 1
+            used_t.add(i)
+            used_f.add(j)
+        for j in range(len(faces)):
+            if j not in used_f:
+                self.tracks.append(Track(face=faces[j], first_seen=now, last_seen=now))
+        self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_age]
+        return [t for t in self.tracks if t.last_seen == now]
+
+    def reset(self) -> None:
+        self.tracks.clear()

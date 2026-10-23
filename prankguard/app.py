@@ -1,0 +1,150 @@
+"""Assemblage : réglages, galerie, journal, moteur, serveur local, systray et fenêtre WebView2."""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+import urllib.request
+
+from . import APP_NAME, __version__, paths, winsys
+from .config import ConfigStore
+from .engine import Engine
+from .events import EventStore
+from .gallery import Gallery
+from .log import get
+from .server import Server
+from .tray import Tray
+
+log = get("app")
+
+
+class PrankGuardApp:
+    def __init__(self, background: bool = False, headless: bool = False, debug: bool = False, dry_run: bool = False):
+        self.background = background
+        self.headless = headless
+        self.debug = debug
+        self.stopping = False
+        self.window = None
+        paths.ensure_dirs()
+        self.config = ConfigStore()
+        self.gallery = Gallery()
+        self.events = EventStore()
+        self.engine = Engine(self.config, self.gallery, self.events, dry_run=dry_run)
+        self.server = Server(self)
+        self.tray = None if headless else Tray(self)
+        self._quit_evt = threading.Event()
+
+        self.engine.on_change = self._on_engine_change
+        self.engine.notify = self._notify
+        self.events.subscribe(self.server.hub.push_event)
+
+    # ── Liaisons ──
+    def _on_engine_change(self, snap: dict) -> None:
+        self.server.hub.push_state(snap)
+        if self.tray:
+            self.tray.set_state(snap["state"])
+
+    def _notify(self, title: str, msg: str) -> None:
+        if self.tray:
+            self.tray.notify(title, msg)
+
+    # ── Fenêtre ──
+    def show_window(self) -> None:
+        if self.window:
+            try:
+                self.window.show()
+                self.window.restore()
+            except Exception:
+                pass
+
+    def window_action(self, action: str) -> None:
+        if not self.window:
+            return
+        if action == "show":
+            self.show_window()
+        elif action == "hide":
+            self.window.hide()
+        elif action == "minimize":
+            self.window.minimize()
+        elif action == "quit":
+            threading.Thread(target=self.quit, daemon=True).start()
+
+    def _on_closing(self):
+        if self.stopping:
+            return True
+        self.window.hide()          # fermer = réduire dans la zone de notification
+        if not getattr(self, "_hint_shown", False):
+            self._hint_shown = True
+            self._notify(APP_NAME, "PrankGuard continue de vous protéger en arrière-plan.")
+        return False
+
+    # ── Cycle de vie ──
+    def run(self) -> None:
+        self._write_instance_file()
+        self.server.start()
+        self.engine.start()
+        if self.tray:
+            self.tray.start()
+        if self.headless:
+            log.info("Mode sans interface : %s", self.server.url)
+            try:
+                while not self._quit_evt.wait(0.5):
+                    pass
+            except KeyboardInterrupt:
+                pass
+            self.quit()
+            return
+
+        import webview
+        s = self.config.s
+        hidden = self.background and s.onboarding_done and s.start_minimized
+        self.window = webview.create_window(
+            APP_NAME, self.server.url, width=1240, height=820, min_size=(980, 660),
+            background_color="#0b0e14", hidden=hidden, text_select=False)
+        self.window.events.closing += self._on_closing
+        storage = str(paths.HOME / "webview")
+        webview.start(gui="edgechromium", debug=self.debug, private_mode=True, storage_path=storage)
+        self.quit()
+
+    def quit(self) -> None:
+        if self.stopping:
+            return
+        self.stopping = True
+        log.info("Arrêt de PrankGuard")
+        try:
+            self.events.add("system", "info", "PrankGuard arrêté")
+        except Exception:
+            pass
+        self.engine.stop()
+        self.server.stop()
+        if self.tray:
+            self.tray.stop()
+        if self.window:
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
+        try:
+            paths.INSTANCE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self.events.close()
+        self._quit_evt.set()
+
+    def _write_instance_file(self) -> None:
+        paths.INSTANCE_FILE.write_text(json.dumps({"pid": os.getpid(), "port": self.server.port,
+                                                   "token": self.server.token, "version": __version__}))
+
+
+def signal_existing_instance() -> bool:
+    """Demande à l'instance déjà lancée d'afficher sa fenêtre."""
+    try:
+        info = json.loads(paths.INSTANCE_FILE.read_text())
+        req = urllib.request.Request(f"http://127.0.0.1:{info['port']}/api/window",
+                                     data=b'{"action":"show"}', method="POST",
+                                     headers={"X-PG-Token": info["token"], "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=2).read()
+        return True
+    except Exception:
+        return False

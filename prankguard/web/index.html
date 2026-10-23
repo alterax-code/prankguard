@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrankGuard</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-state="starting">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.4 10.4 0 0 1 12 5c7 0 10 7 10 7a13 13 0 0 1-1.67 2.68M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.39-1.61M2 2l20 20"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg><use href="#i-shield"/></svg><span class="brand-dot"></span></div>
+      <div>
+        <div class="brand-name">PrankGuard</div>
+        <div class="brand-sub" id="brandState">Démarrage…</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-page="dashboard"><svg><use href="#i-video"/></svg><span>Surveillance</span></button>
+      <button class="nav-item" data-page="profiles"><svg><use href="#i-users"/></svg><span>Profils</span><em class="nav-badge" id="navProfiles"></em></button>
+      <button class="nav-item" data-page="journal"><svg><use href="#i-activity"/></svg><span>Journal</span><em class="nav-badge alert" id="navJournal"></em></button>
+      <button class="nav-item" data-page="settings"><svg><use href="#i-sliders"/></svg><span>Réglages</span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <label class="arm-toggle" title="Activer / désactiver la surveillance">
+        <input type="checkbox" id="armToggle">
+        <span class="switch"></span>
+        <span class="arm-label" id="armLabel">Surveillance active</span>
+      </label>
+      <div class="version" id="version">v3</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ═══════════ SURVEILLANCE ═══════════ -->
+    <section class="page active" id="page-dashboard">
+      <div class="hero">
+        <div class="hero-ring">
+          <svg class="ring" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="52"/>
+            <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="52"/>
+          </svg>
+          <div class="hero-icon"><svg><use id="heroIconUse" href="#i-shield-check"/></svg></div>
+        </div>
+        <div class="hero-text">
+          <div class="hero-kicker" id="heroKicker">État</div>
+          <h1 id="heroTitle">Démarrage…</h1>
+          <p id="heroSub">Initialisation de la caméra et des modèles.</p>
+        </div>
+        <div class="hero-actions">
+          <div class="dropdown" id="snoozeDrop">
+            <button class="btn ghost" id="snoozeBtn"><svg><use href="#i-pause"/></svg>Pause<svg class="chev"><use href="#i-chevron"/></svg></button>
+            <div class="menu">
+              <button data-snooze="15">15 minutes</button>
+              <button data-snooze="60">1 heure</button>
+              <button data-snooze="240">4 heures</button>
+            </div>
+          </div>
+          <button class="btn primary" id="resumeBtn" hidden><svg><use href="#i-shield-check"/></svg>Réactiver</button>
+          <button class="btn danger" id="lockBtn"><svg><use href="#i-lock"/></svg>Verrouiller</button>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <div class="card cam-card">
+          <div class="cam" id="cam">
+            <img id="camImg" alt="">
+            <div class="cam-overlay" id="camOverlay"></div>
+            <div class="cam-empty" id="camEmpty">
+              <div class="spinner"></div>
+              <span id="camEmptyText">Connexion à la caméra…</span>
+            </div>
+            <div class="cam-hud">
+              <span class="pill live"><i></i>LIVE</span>
+              <span class="pill mono" id="hudFps">— fps</span>
+              <span class="pill mono" id="hudMs">— ms</span>
+            </div>
+            <button class="cam-privacy" id="privacyBtn" title="Masquer l'aperçu (la surveillance continue)"><svg><use href="#i-eye-off"/></svg></button>
+          </div>
+          <div class="cam-legend">
+            <span><i class="dot known"></i>Profil reconnu</span>
+            <span><i class="dot unknown"></i>Inconnu</span>
+            <span><i class="dot pending"></i>Analyse</span>
+            <span><i class="dot spoof"></i>Photo / écran</span>
+            <span class="grow"></span>
+            <span class="muted" id="camInfo"></span>
+          </div>
+        </div>
+
+        <div class="side-col">
+          <div class="card">
+            <div class="card-head"><h3>Aujourd'hui</h3><span class="muted small">24 h</span></div>
+            <div class="stats">
+              <div class="stat"><b id="stLocks">0</b><span>Verrouillages</span></div>
+              <div class="stat"><b id="stWarn">0</b><span>Regards</span></div>
+              <div class="stat"><b id="stDev">0</b><span>Périphériques</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Protections</h3><button class="link" data-goto="settings">Modifier</button></div>
+            <div class="rules" id="rules"></div>
+          </div>
+          <div class="card grow">
+            <div class="card-head"><h3>Activité récente</h3><button class="link" data-goto="journal">Tout voir</button></div>
+            <ul class="feed" id="feedMini"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ PROFILS ═══════════ -->
+    <section class="page" id="page-profiles">
+      <header class="page-head">
+        <div>
+          <h2>Profils autorisés</h2>
+          <p class="muted">Les visages enregistrés ici ne déclenchent jamais de verrouillage. Données chiffrées sur ce PC (DPAPI).</p>
+        </div>
+        <button class="btn primary" id="addProfileBtn"><svg><use href="#i-plus"/></svg>Ajouter un profil</button>
+      </header>
+      <div class="profiles" id="profiles"></div>
+      <div class="empty-state" id="profilesEmpty" hidden>
+        <div class="empty-icon"><svg><use href="#i-scan"/></svg></div>
+        <h3>Aucun profil</h3>
+        <p class="muted">Enregistrez votre visage pour que PrankGuard vous reconnaisse.<br>Cela prend environ 20 secondes.</p>
+        <button class="btn primary" data-action="enroll"><svg><use href="#i-scan"/></svg>Enregistrer mon visage</button>
+      </div>
+    </section>
+
+    <!-- ═══════════ JOURNAL ═══════════ -->
+    <section class="page" id="page-journal">
+      <header class="page-head">
+        <div>
+          <h2>Journal</h2>
+          <p class="muted">Verrouillages, regards indiscrets, périphériques et événements système.</p>
+        </div>
+        <div class="seg" id="journalFilter">
+          <button class="active" data-kind="">Tout</button>
+          <button data-kind="lock">Verrouillages</button>
+          <button data-kind="warn">Regards</button>
+          <button data-kind="device">Périphériques</button>
+          <button data-kind="system">Système</button>
+        </div>
+      </header>
+      <ul class="timeline" id="timeline"></ul>
+      <div class="center"><button class="btn ghost" id="moreEvents" hidden>Charger plus</button></div>
+      <div class="empty-state" id="journalEmpty" hidden>
+        <div class="empty-icon"><svg><use href="#i-activity"/></svg></div>
+        <h3>Rien à signaler</h3>
+        <p class="muted">Les événements apparaîtront ici.</p>
+      </div>
+    </section>
+
+    <!-- ═══════════ RÉGLAGES ═══════════ -->
+    <section class="page" id="page-settings">
+      <header class="page-head">
+        <div>
+          <h2>Réglages</h2>
+          <p class="muted">Chaque modification est appliquée et enregistrée immédiatement.</p>
+        </div>
+      </header>
+      <div class="settings" id="settings"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ═══════════ ENRÔLEMENT ═══════════ -->
+<div class="modal" id="enrollModal" hidden>
+  <div class="modal-card enroll-card">
+    <button class="modal-x" data-close><svg><use href="#i-x"/></svg></button>
+    <div class="enroll-step" data-step="name">
+      <div class="modal-icon"><svg><use href="#i-scan"/></svg></div>
+      <h2>Nouveau profil</h2>
+      <p class="muted">Comment s'appelle la personne à enregistrer ?</p>
+      <input class="input big" id="enrollName" maxlength="40" placeholder="Votre prénom" autocomplete="off">
+      <p class="error" id="enrollErr"></p>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>Annuler</button>
+        <button class="btn primary" id="enrollGo">Commencer<svg><use href="#i-chevron" class="rot"/></svg></button>
+      </div>
+    </div>
+    <div class="enroll-step" data-step="capture" hidden>
+      <h2 id="enrollTitle">Enregistrement</h2>
+      <div class="enroll-stage">
+        <div class="enroll-view">
+          <div class="enroll-clip"><img id="enrollImg" alt=""></div>
+          <svg class="enroll-ring" viewBox="0 0 200 200" id="enrollRing"></svg>
+        </div>
+      </div>
+      <p class="enroll-hint" id="enrollHint">Placez votre visage dans le cercle</p>
+      <div class="pose-row" id="poseRow"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="enrollCancel">Annuler</button>
+        <button class="btn primary" id="enrollFinish" disabled>Terminer</button>
+      </div>
+    </div>
+    <div class="enroll-step" data-step="done" hidden>
+      <div class="modal-icon ok"><svg><use href="#i-check"/></svg></div>
+      <h2>Profil enregistré</h2>
+      <p class="muted" id="enrollDoneText">PrankGuard vous reconnaît désormais.</p>
+      <div class="modal-actions"><button class="btn primary" data-close>Parfait</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ BIENVENUE ═══════════ -->
+<div class="modal" id="welcomeModal" hidden>
+  <div class="modal-card welcome">
+    <div class="welcome-art"><svg><use href="#i-shield-check"/></svg></div>
+    <h1>Bienvenue dans PrankGuard</h1>
+    <p class="muted">Votre webcam veille sur votre poste : si quelqu'un d'autre que vous s'installe devant l'écran, la session se verrouille instantanément.</p>
+    <ul class="welcome-list">
+      <li><svg><use href="#i-scan"/></svg><div><b>Reconnaissance faciale locale</b><span>Rien ne quitte votre PC, aucune connexion requise.</span></div></li>
+      <li><svg><use href="#i-eye"/></svg><div><b>Anti regard indiscret</b><span>Alerte quand quelqu'un lit par-dessus votre épaule.</span></div></li>
+      <li><svg><use href="#i-plug"/></svg><div><b>Périphériques surveillés</b><span>Clé USB branchée en votre absence ? Verrouillage.</span></div></li>
+    </ul>
+    <div class="modal-actions">
+      <button class="btn ghost" id="welcomeSkip">Plus tard</button>
+      <button class="btn primary" id="welcomeGo"><svg><use href="#i-scan"/></svg>Enregistrer mon visage</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox" hidden><img alt=""><button class="modal-x"><svg><use href="#i-x"/></svg></button></div>
+<div class="toasts" id="toasts"></div>
+<div class="alert-flash" id="alertFlash"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
