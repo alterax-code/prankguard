@@ -334,7 +334,7 @@ async function loadProfiles() {
         <button class="icon-btn del" data-del="${esc(p.name)}" title="Supprimer">${icon("i-trash")}</button></div>
       <img class="avatar" src="${q("/media/face/" + encodeURIComponent(p.name))}&v=${p.created}" alt="">
       <h3>${esc(p.name)}</h3>
-      <div class="meta">${p.samples} échantillons · ${new Date(p.created * 1000).toLocaleDateString("fr-FR")}</div>
+      <div class="meta">${p.samples} échantillons${p.learned ? ` + ${p.learned} appris <button class="link" data-forget="${esc(p.name)}" title="Oublier les vues apprises automatiquement">oublier</button>` : ""} · ${new Date(p.created * 1000).toLocaleDateString("fr-FR")}</div>
       <button class="btn sm ghost" data-reenroll="${esc(p.name)}">${icon("i-scan")}Réenregistrer</button>`;
     grid.appendChild(c);
   }
@@ -347,6 +347,12 @@ async function loadProfiles() {
   }
 }
 $("#page-profiles").addEventListener("click", async e => {
+  const forget = e.target.closest("[data-forget]");
+  if (forget) {
+    await api("/api/profiles/forget-learning", { name: forget.dataset.forget });
+    toast("Vues apprises oubliées", "ok", "i-check");
+    return loadProfiles();
+  }
   const del = e.target.closest("[data-del]");
   if (del) {
     if (!del.classList.contains("confirm")) {
@@ -529,6 +535,7 @@ const SCHEMA = [
     { k: "match_threshold", type: "range", min: .3, max: .6, step: .01, label: "Exigence de reconnaissance", desc: "Score minimal pour vous reconnaître. Gardez une marge sous votre score habituel.<em class=\"live-score\" id=\"liveScore\"></em>", ends: ["Tolérant", "Strict"], fmt: v => `${Math.round(v * 100)} % · ${strictness(v)}` },
     { k: "min_face_size", type: "range", min: .05, max: .3, step: .01, label: "Portée de détection", desc: "Taille minimale d'un visage pour estimer qu'il lit l'écran.", ends: ["Loin", "Proche"], fmt: v => Math.round(v * 100) + "%" },
     { k: "max_yaw", type: "range", min: .2, max: .9, step: .05, label: "Angle de regard toléré", desc: "Au-delà, une personne de profil n'est pas considérée comme lisant l'écran.", ends: ["Strict", "Large"], fmt: deg },
+    { k: "adaptive_learning", type: "toggle", label: "Apprentissage continu", desc: "Ajoute à votre profil les vues nettes et certaines de vous (lumière, lunettes, angle) pour vous reconnaître de mieux en mieux." },
     { k: "anti_spoof", type: "toggle", label: "Ignorer photos et écrans", desc: "Anti-spoofing : un poster ou une photo ne déclenche rien et ne vous imite pas." },
   ]},
   { title: "Périphériques", icon: "i-plug", rows: [

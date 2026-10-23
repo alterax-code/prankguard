@@ -268,3 +268,59 @@ def test_session_lock_during_question_refuses_device(eng, ask):
     eng._on_session("lock")
     assert eng.snapshot()["device_prompt"] is None and ask["eject"] == [r"USB\X"]
     assert ask["lock"] == 0                            # déjà verrouillée : pas de second verrouillage
+
+
+# ── Apprentissage continu ─────────────────────────────────────────────────────
+
+def _unit(*pairs):
+    v = np.zeros(128, np.float32)
+    for i, x in pairs:
+        v[i] = x
+    return v / np.linalg.norm(v)
+
+
+@pytest.fixture
+def learner(eng, monkeypatch):
+    from prankguard.vision.faces import Track
+    eng.gallery.upsert("alice", np.stack([_unit((0, 1), (1, .05)), _unit((0, 1), (2, .05)), _unit((0, 1), (3, .05))]), b"")
+    eng.reload_gallery()
+    monkeypatch.setattr(eng.faces, "embeddable", lambda f: True)
+    t = Track(face=None)
+    t.status, t.name, t.live, t.live_n = "known", "alice", 0.97, 5
+    return t
+
+
+def test_learns_a_new_safe_view_once_per_interval(eng, learner):
+    emb = _unit((0, .8), (5, .6))                  # même personne, autre éclairage : sim d'ancrage 0,8
+    assert eng._maybe_learn(learner, emb, 1000.0)
+    assert eng.gallery.summary()[0]["learned"] == 1
+    assert not eng._maybe_learn(learner, _unit((0, .8), (6, .6)), 1010.0)   # trop tôt
+    assert eng._maybe_learn(learner, _unit((0, .8), (6, .6)), 1000.0 + E.LEARN_INTERVAL)
+
+
+def test_does_not_learn_redundant_view(eng, learner):
+    assert not eng._maybe_learn(learner, _unit((0, 1), (1, .05)), 1000.0)
+
+
+def test_does_not_learn_when_not_anchored_to_enrollment(eng, learner):
+    """Vue proche d'échantillons appris mais pas de l'enrôlement : refusée (anti-dérive)."""
+    assert not eng._maybe_learn(learner, _unit((0, .35), (7, .94)), 1000.0)
+
+
+def test_does_not_learn_doubtful_liveness(eng, learner):
+    learner.live = 0.6
+    assert not eng._maybe_learn(learner, _unit((0, .8), (5, .6)), 1000.0)
+
+
+def test_learning_can_be_disabled(eng, learner, monkeypatch):
+    eng.config.update({"adaptive_learning": False})
+    frame = np.zeros((480, 640, 3), np.uint8)
+    called = []
+    monkeypatch.setattr(eng, "_maybe_learn", lambda *a: called.append(a))
+    from prankguard.vision.faces import Face
+    face = Face(box=np.array([200, 100, 200, 240], np.float32), landmarks=np.zeros((5, 2), np.float32),
+                score=0.9, raw=np.zeros(15, np.float32), yaw=0.0, pitch=0.0, rel_size=0.5)
+    monkeypatch.setattr(eng.faces, "detect", lambda f: [face])
+    monkeypatch.setattr(eng.faces, "embed", lambda f, x: _unit((0, 1)))
+    eng._analyze(frame + 100, 1000.0)
+    assert called == []

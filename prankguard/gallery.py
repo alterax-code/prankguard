@@ -1,5 +1,9 @@
 """Profils enrôlés : {nom: embeddings (N,128) float32} + miniature, chiffrés au repos par DPAPI
-(lié au compte Windows — aucun mot de passe à retenir, inutilisable sur une autre machine/compte)."""
+(lié au compte Windows — aucun mot de passe à retenir, inutilisable sur une autre machine/compte).
+
+Chaque profil a deux jeux d'embeddings : « emb » (enrôlement, jamais modifié automatiquement) et
+« adapt » (appris en continu, borné, remplacé en FIFO) qui suit les variations du quotidien.
+"""
 from __future__ import annotations
 
 import io
@@ -15,6 +19,7 @@ from .log import get
 
 log = get("gallery")
 _MAGIC = b"PGv3"
+MAX_ADAPTIVE = 40          # échantillons appris par profil (les plus anciens sont remplacés)
 
 
 class Gallery:
@@ -22,7 +27,7 @@ class Gallery:
         self.path = path
         self.encrypt = encrypt
         self._lock = threading.RLock()
-        self.people: dict[str, dict] = {}   # nom -> {"emb": ndarray, "thumb": bytes(jpeg), "created": ts}
+        self.people: dict[str, dict] = {}   # nom -> {"emb", "adapt": ndarray, "thumb": bytes(jpeg), "created"}
         self.load()
 
     # ── Persistance ──
@@ -39,8 +44,11 @@ class Gallery:
                 with np.load(io.BytesIO(raw), allow_pickle=False) as z:
                     meta = json.loads(bytes(z["__meta__"]).decode("utf-8"))
                     for i, m in enumerate(meta):
+                        emb = z[f"e{i}"].astype(np.float32)
+                        adapt = z[f"a{i}"].astype(np.float32) if f"a{i}" in z.files else emb[:0]
                         self.people[m["name"]] = {
-                            "emb": z[f"e{i}"].astype(np.float32),
+                            "emb": emb,
+                            "adapt": adapt,
                             "thumb": bytes(z[f"t{i}"]),
                             "created": m.get("created", 0),
                         }
@@ -54,6 +62,7 @@ class Gallery:
             for i, (name, p) in enumerate(self.people.items()):
                 meta.append({"name": name, "created": p["created"]})
                 arrays[f"e{i}"] = p["emb"]
+                arrays[f"a{i}"] = p["adapt"]
                 arrays[f"t{i}"] = np.frombuffer(p["thumb"], dtype=np.uint8)
             arrays["__meta__"] = np.frombuffer(json.dumps(meta).encode("utf-8"), dtype=np.uint8)
             buf = io.BytesIO()
@@ -67,13 +76,38 @@ class Gallery:
 
     # ── API ──
     def embeddings(self) -> dict[str, np.ndarray]:
+        """Enrôlement + appris : ce que la reconnaissance compare."""
+        with self._lock:
+            return {n: np.vstack([p["emb"], p["adapt"]]) for n, p in self.people.items()}
+
+    def enrolled(self) -> dict[str, np.ndarray]:
+        """Enrôlement seul : ancre qui empêche l'apprentissage continu de dériver."""
         with self._lock:
             return {n: p["emb"] for n, p in self.people.items()}
 
     def upsert(self, name: str, emb: np.ndarray, thumb: bytes) -> None:
+        emb = np.asarray(emb, np.float32)
         with self._lock:
-            self.people[name] = {"emb": np.asarray(emb, np.float32), "thumb": thumb, "created": time.time()}
+            self.people[name] = {"emb": emb, "adapt": emb[:0], "thumb": thumb, "created": time.time()}
             self.save()
+
+    def add_adaptive(self, name: str, emb: np.ndarray) -> bool:
+        with self._lock:
+            p = self.people.get(name)
+            if p is None:
+                return False
+            p["adapt"] = np.vstack([p["adapt"], np.asarray(emb, np.float32)[None]])[-MAX_ADAPTIVE:]
+            self.save()
+            return True
+
+    def forget_adaptive(self, name: str) -> bool:
+        with self._lock:
+            p = self.people.get(name)
+            if p is None:
+                return False
+            p["adapt"] = p["emb"][:0]
+            self.save()
+            return True
 
     def remove(self, name: str) -> bool:
         with self._lock:
@@ -92,7 +126,7 @@ class Gallery:
 
     def summary(self) -> list[dict]:
         with self._lock:
-            return [{"name": n, "samples": int(len(p["emb"])), "created": p["created"]}
+            return [{"name": n, "samples": int(len(p["emb"])), "learned": int(len(p["adapt"])), "created": p["created"]}
                     for n, p in self.people.items()]
 
     def thumb(self, name: str) -> bytes | None:

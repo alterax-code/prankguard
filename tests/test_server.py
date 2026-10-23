@@ -467,3 +467,13 @@ def test_device_decision_is_forwarded(srv):
 def test_trust_from_journal_keeps_device_name(srv):
     jpost(srv, "/api/devices/trust", {"key": "0781:5581", "name": "SanDisk Ultra"})
     assert jget(srv, "/api/settings")["device_names"]["0781:5581"] == "SanDisk Ultra"
+
+
+def test_forget_learning_endpoint(srv):
+    import numpy as np
+    g = srv.fake_app.gallery
+    g.upsert("zoe", np.eye(128, dtype=np.float32)[:3], b"")
+    g.add_adaptive("zoe", np.eye(128, dtype=np.float32)[5])
+    assert jpost(srv, "/api/profiles/forget-learning", {"name": "zoe"}) == {"ok": True}
+    assert next(p for p in jget(srv, "/api/profiles")["profiles"] if p["name"] == "zoe")["learned"] == 0
+    assert jpost(srv, "/api/profiles/forget-learning", {"name": "inconnu"}) == {"ok": False}

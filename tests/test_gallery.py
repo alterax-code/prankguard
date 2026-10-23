@@ -59,7 +59,7 @@ def test_summary(path, encrypt):
     g = Gallery(path, encrypt=encrypt)
     g.upsert("alice", embs(1, 5), THUMB)
     s = g.summary()
-    assert s == [{"name": "alice", "samples": 5, "created": g.people["alice"]["created"]}]
+    assert s == [{"name": "alice", "samples": 5, "learned": 0, "created": g.people["alice"]["created"]}]
 
 
 def test_rename(path, encrypt):
@@ -127,3 +127,44 @@ def test_embeddings_returns_a_shallow_copy_of_the_mapping(path):
     g.upsert("alice", embs(1), THUMB)
     g.embeddings().pop("alice")
     assert "alice" in g.people
+
+
+def test_adaptive_samples_roundtrip_and_fifo(path, encrypt, monkeypatch):
+    import prankguard.gallery as gal
+    monkeypatch.setattr(gal, "MAX_ADAPTIVE", 3)
+    g = Gallery(path, encrypt=encrypt)
+    g.upsert("alice", embs(1, 5), THUMB)
+    extra = embs(9, 4)
+    for e in extra:
+        g.add_adaptive("alice", e)
+    g2 = Gallery(path, encrypt=encrypt)
+    assert np.allclose(g2.people["alice"]["adapt"], extra[-3:])        # FIFO borné
+    assert len(g2.embeddings()["alice"]) == 8 and len(g2.enrolled()["alice"]) == 5
+    assert g2.summary()[0]["learned"] == 3
+
+
+def test_reenroll_and_forget_reset_learning(path, encrypt):
+    g = Gallery(path, encrypt=encrypt)
+    g.upsert("alice", embs(1, 5), THUMB)
+    g.add_adaptive("alice", embs(2, 1)[0])
+    assert g.forget_adaptive("alice") and g.summary()[0]["learned"] == 0
+    g.add_adaptive("alice", embs(2, 1)[0])
+    g.upsert("alice", embs(3, 5), THUMB)
+    assert g.summary()[0]["learned"] == 0
+    assert not g.add_adaptive("bob", embs(2, 1)[0])
+
+
+def test_legacy_file_without_adaptive_loads(path, encrypt):
+    """Galerie écrite avant l'apprentissage continu : aucun champ a{i}."""
+    g = Gallery(path, encrypt=encrypt)
+    g.upsert("alice", embs(1, 5), THUMB)
+    g.people["alice"].pop("adapt")
+    import io, json
+    arrays = {"e0": g.people["alice"]["emb"], "t0": np.frombuffer(THUMB, np.uint8),
+              "__meta__": np.frombuffer(json.dumps([{"name": "alice", "created": 1}]).encode(), np.uint8)}
+    buf = io.BytesIO(); np.savez_compressed(buf, **arrays)
+    raw = buf.getvalue()
+    from prankguard import gallery as gal, winsys
+    path.write_bytes(gal._MAGIC + (winsys.dpapi_protect(raw) if encrypt else raw))
+    g2 = Gallery(path, encrypt=encrypt)
+    assert g2.summary()[0]["learned"] == 0 and len(g2.embeddings()["alice"]) == 5

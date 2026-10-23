@@ -184,6 +184,12 @@ def _make_handler(srv: Server):
             app.events.add("enroll", "info", f"Profil « {old} » renommé en « {new} »")
         return {"ok": ok}
 
+    @post_("/api/profiles/forget-learning")
+    def _profiles_forget(h, body):
+        ok = app.gallery.forget_adaptive(str(body.get("name", "")))
+        app.engine.reload_gallery()
+        return {"ok": ok}
+
     @post_("/api/enroll/start")
     def _enroll_start(h, body):
         name = str(body.get("name", "")).strip()[:40]

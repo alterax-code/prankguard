@@ -36,6 +36,11 @@ DEVICE_QUIET_AFTER_WAKE = 10.0   # après une sortie de veille uniquement (jamai
 WAKE_TOLERATED = {"display", "audio", "network", "bluetooth", "camera", "other"}
 ENROLL_TIMEOUT = 120.0       # un enrôlement abandonné ne doit jamais laisser la protection coupée
 LOCK_CONFIRM_DELAY = 2.5     # après LockWorkStation, délai avant de vérifier l'état réel de la session
+# Apprentissage continu : n'apprend que des vues sûres, variées et ancrées sur l'enrôlement d'origine
+LEARN_INTERVAL = 45.0        # au plus un échantillon appris toutes les 45 s
+LEARN_ANCHOR_MARGIN = 0.04   # similarité à l'ENRÔLEMENT ≥ seuil + marge (pas aux échantillons appris)
+LEARN_MIN_LIVE = 0.85        # anti-spoofing nettement « réel »
+LEARN_NOVELTY = 0.90         # inutile d'apprendre une vue quasi identique à une vue déjà connue
 
 _prompt_ids = itertools.count(1)
 
@@ -59,6 +64,8 @@ class Engine:
         self.faces = FaceEngine()
         self.tracker = Tracker()
         self.matcher = Matcher(gallery.embeddings())
+        self.anchor = Matcher(gallery.enrolled())
+        self._last_learn = 0.0
         self.guard = G.Guard(s)
         self.guard.enrolled = not self.matcher.empty
         self.dry_run = dry_run
@@ -154,6 +161,7 @@ class Engine:
 
     def reload_gallery(self) -> None:
         self.matcher.set_gallery(self.gallery.embeddings())
+        self.anchor.set_gallery(self.gallery.enrolled())
         with self._lock:
             was = self.guard.enrolled
             self.guard.enrolled = not self.matcher.empty
@@ -295,8 +303,11 @@ class Engine:
                     t.last_embed = now
                     t.status = "spoof" if t.is_spoof else ("unknown" if t.hits >= 2 else "pending")
                 else:
-                    name, sim = self.matcher.best(self.faces.embed(frame, t.face))
+                    emb = self.faces.embed(frame, t.face)
+                    name, sim = self.matcher.best(emb)
                     t.observe_similarity(name, sim, s.match_threshold, now)
+                    if s.adaptive_learning and len(tracks) == 1:
+                        self._maybe_learn(t, emb, now)
                 embeds += 1
             except Exception:
                 # une erreur d'un modèle ne doit jamais empêcher la décision de tourner
@@ -308,6 +319,28 @@ class Engine:
             G.FaceObs(status=t.status, name=t.name, looking=self._is_looking(t)) for t in tracks])
         self._step_guard(obs, frame)
         return embeds
+
+    def _maybe_learn(self, t: Track, emb: np.ndarray, now: float) -> bool:
+        """Ajoute une vue du propriétaire au profil si elle est sûre ET apporte du nouveau."""
+        s = self.config.s
+        if t.status != "known" or not t.name or now - self._last_learn < LEARN_INTERVAL:
+            return False
+        if s.anti_spoof and (t.live is None or t.live_n < 3 or t.live < LEARN_MIN_LIVE):
+            return False
+        if not self.faces.embeddable(t.face):
+            return False
+        anchor_name, anchor_sim = self.anchor.best(emb)
+        if anchor_name != t.name or anchor_sim < s.match_threshold + LEARN_ANCHOR_MARGIN:
+            return False
+        known = self.gallery.embeddings().get(t.name)
+        if known is None or (len(known) and float((known @ emb).max()) >= LEARN_NOVELTY):
+            return False
+        self._last_learn = now
+        if self.gallery.add_adaptive(t.name, emb):
+            self.matcher.set_gallery(self.gallery.embeddings())
+            log.info("Profil %s enrichi (vue nouvelle, similarité d'ancrage %.2f)", t.name, anchor_sim)
+            return True
+        return False
 
     def _is_looking(self, t: Track) -> bool:
         s = self.config.s

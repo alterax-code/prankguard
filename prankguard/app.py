@@ -31,6 +31,7 @@ class PrankGuardApp:
         self.ui_visible = True
         paths.ensure_dirs()
         self.config = ConfigStore()
+        self._sync_autostart()
         self.gallery = Gallery()
         self.events = EventStore()
         self.engine = Engine(self.config, self.gallery, self.events, dry_run=dry_run)
@@ -44,6 +45,19 @@ class PrankGuardApp:
         self.events.subscribe(self.server.hub.push_event)
         self.engine.watcher.on_endsession = self._on_endsession
         self._quit_done = threading.Event()
+
+    def _sync_autostart(self) -> None:
+        """L'installeur peut activer le démarrage automatique : le réglage reflète le registre réel.
+
+        Affectation directe (sans abonnés) : réécrire la clé Run pointerait vers cet exécutable-ci.
+        """
+        try:
+            real = winsys.get_autostart()
+        except OSError:
+            return
+        if real != self.config.s.start_with_windows:
+            self.config.s.start_with_windows = real
+            self.config.save()
 
     # ── Liaisons ──
     def _on_engine_change(self, snap: dict) -> None:

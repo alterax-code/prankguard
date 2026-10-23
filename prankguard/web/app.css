@@ -99,6 +99,7 @@ h3 { font-size: 14px; font-weight: 600; }
 .chip { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer; color: var(--muted);
   background: transparent; border: 1px solid var(--border-2); transition: all .15s var(--ease); }
 .chip.active { color: var(--text); background: rgba(var(--accent-rgb), .16); border-color: rgba(var(--accent-rgb), .5); }
+.link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
 .trusted-name { font-weight: 600; margin-right: 8px; }
 .brand-sub { font-size: 12px; color: var(--accent); transition: color .4s; }
 
