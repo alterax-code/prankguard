@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from . import models
+from .gaze import eyes_on_screen
 from ..log import get
 
 log = get("faces")
@@ -372,6 +373,8 @@ class Track:
     moire: float = 0.0        # niveau de trame d'écran (médiane des 3 dernières mesures), 0..1
     moire_raw: float | None = None   # dernier rapport pic/médiane brut (diagnostic)
     depth: bool = False       # relief 3D observé récemment
+    eyes: deque = field(default_factory=lambda: deque(maxlen=5))   # (t, lacet tête, décalage iris)
+    last_gaze: float = 0.0
 
     UNKNOWN_GAP = 0.12        # inconnu seulement si nettement sous le seuil (évite de verrouiller le propriétaire)
     UNKNOWN_MAX = 0.30        # plafond absolu : un seuil « strict » ne transforme jamais le propriétaire en inconnu
@@ -384,6 +387,16 @@ class Track:
     def observe_liveness(self, p_real: float) -> None:
         self.live = p_real if self.live is None else 0.5 * p_real + 0.5 * self.live
         self.live_n += 1
+
+    EYES_FRESH = 1.0          # s : au-delà, on revient à la pose de tête
+
+    def eyes_looking(self, yaw_center: float = 0.0) -> bool | None:
+        """Regard horizontal d'après les yeux (médiane des dernières mesures), None si rien de récent."""
+        recent = [(y, i) for t, y, i in self.eyes if self.last_seen - t <= self.EYES_FRESH]
+        if len(recent) < 2:
+            return None
+        ys, irs = zip(*recent)
+        return eyes_on_screen(float(np.median(ys)), float(np.median(irs)), yaw_center)
 
     def depth_evidence(self) -> bool:
         """Au moins deux images récentes où le nez sort du plan yeux-bouche par rapport à l'image actuelle."""

@@ -45,6 +45,7 @@ class Settings:
     match_threshold: float = 0.42     # similarité cosinus SFace min pour reconnaître un visage enrôlé
     anti_spoof: bool = True           # ignore photos / écrans (posters, téléphone tendu vers la caméra)
     adaptive_learning: bool = True    # enrichit le profil avec les vues nettes et certaines du propriétaire
+    eye_gaze: bool = True             # « regarde l'écran » d'après les yeux (pas seulement la tête)
     min_face_size: float = 0.10       # hauteur visage / hauteur image pour considérer qu'il "lit" l'écran
     max_yaw: float = 0.45             # tolérance de rotation de tête autour de l'axe du regard vers l'écran
     gaze_yaw: float = 0.0             # axe "regarde l'écran" vu par la caméra (calibré à l'enrôlement)

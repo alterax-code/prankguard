@@ -192,7 +192,7 @@ function renderFaces(faces) {
     const pct = f.sim != null ? `<small>${Math.round(Math.max(0, f.sim) * 100)}%</small>` : "";
     const label = { known: esc(f.name), unknown: "Inconnu", pending: "Analyse…", spoof: "Photo / écran" }[f.status] || "";
     $(".tag", b).innerHTML = `${label} ${f.status === "spoof" ? "" : pct}`;
-    $(".gaze", b).textContent = f.looking ? "REGARDE" : "";
+    $(".gaze", b).textContent = f.looking ? (f.gaze_src === "yeux" ? "REGARDE · yeux" : "REGARDE") : "";
     $(".gaze", b).hidden = !f.looking;
   }
   for (const [id, b] of boxes) if (!seen.has(id)) { b.remove(); boxes.delete(id); }
@@ -547,6 +547,7 @@ const SCHEMA = [
     { k: "max_yaw", type: "range", min: .2, max: .9, step: .05, label: "Angle de regard toléré", desc: "Au-delà, une personne de profil n'est pas considérée comme lisant l'écran.", ends: ["Strict", "Large"], fmt: deg },
     { k: "adaptive_learning", type: "toggle", label: "Apprentissage continu", desc: "Ajoute à votre profil les vues nettes et certaines de vous (lumière, lunettes, angle) pour vous reconnaître de mieux en mieux." },
     { k: "anti_spoof", type: "toggle", label: "Ignorer photos et écrans", desc: "Analyse de texture (MiniFASNet), trame d'écran (moiré) et relief 3D de la tête : un poster, une photo ou un téléphone ne déclenche rien et ne vous imite pas." },
+    { k: "eye_gaze", type: "toggle", label: "Regard par les yeux", desc: "Juge « regarde l'écran » d'après les yeux et non la seule orientation de la tête : tête tournée mais yeux sur l'écran = regarde. Visages proches seulement (moins d'un mètre environ)." },
   ]},
   { title: "Périphériques", icon: "i-plug", rows: [
     { k: "device_action", type: "seg", label: "Branchement d'un périphérique", desc: "« Demander » : fenêtre d'autorisation si vous êtes là, clavier bloqué en attendant. Refus, silence ou absence : verrouillage.", options: [["off", "Ignorer"], ["notify", "Notifier"], ["ask", "Demander"], ["lock", "Verrouiller"]] },

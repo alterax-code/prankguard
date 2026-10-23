@@ -18,6 +18,7 @@ from .enroll import EnrollSession
 from .events import EventStore
 from .gallery import Gallery
 from .log import get
+from .vision import gaze as GZ
 from .vision.camera import Camera
 from .vision.faces import EDGEFACE, FaceEngine, ProfileMatcher, Track, Tracker
 
@@ -39,6 +40,9 @@ LOCK_CONFIRM_DELAY = 2.5     # après LockWorkStation, délai avant de vérifier
 # Apprentissage continu : n'apprend que des vues sûres, variées et ancrées sur l'enrôlement d'origine
 LEARN_INTERVAL = 45.0        # au plus un échantillon appris toutes les 45 s
 LEARN_ANCHOR_MARGIN = 0.04   # similarité à l'ENRÔLEMENT ≥ seuil + marge (pas aux échantillons appris)
+GAZE_PERIOD = 0.15           # s entre deux mesures des yeux pour un même visage
+GAZE_PERIOD_KNOWN = 0.5      # propriétaire reconnu : affichage seulement, cadence réduite
+YAW_MESH_RATIO = 1.36        # lacet YuNet ≈ 1,36 x lacet mesuré sur le maillage
 LEARN_MIN_LIVE = 0.85        # anti-spoofing nettement « réel »
 LEARN_NOVELTY = 0.90         # inutile d'apprendre une vue quasi identique à une vue déjà connue
 LEARN_IF_BELOW = 0.70        # vue déjà très bien reconnue : rien à apprendre (on garde la place)
@@ -65,6 +69,7 @@ class Engine:
         s = config.s
         self.camera = Camera(s.camera_index, s.camera_width, s.camera_height)
         self.faces = FaceEngine()
+        self._gaze = None          # chargé à la première utilisation (False si indisponible)
         self.tracker = Tracker()
         self.matcher = ProfileMatcher()
         self.anchor = ProfileMatcher()
@@ -304,6 +309,8 @@ class Engine:
             return 1
 
         tracks = self.tracker.update(faces, now)
+        if s.eye_gaze:
+            self._update_eyes(frame, tracks, now)
         # Reconnaissance : priorité aux visages non identifiés, budget limité par image.
         # Un visage qui regarde l'écran est toujours analysé, même petit ou de biais,
         # sinon il resterait "en analyse" indéfiniment sans jamais déclencher.
@@ -373,11 +380,39 @@ class Engine:
             return True
         return False
 
+    def _update_eyes(self, frame: np.ndarray, tracks: list[Track], now: float) -> None:
+        """Direction des yeux : vite pour les visages qui peuvent déclencher, lentement pour le propriétaire."""
+        due = [t for t in tracks if t.status != "spoof" and t.face.box[2] >= GZ.MIN_FACE_PX
+               and now - t.last_gaze >= (GAZE_PERIOD_KNOWN if t.status == "known" else GAZE_PERIOD)]
+        if not due:
+            return
+        if self._gaze is None:
+            try:
+                self._gaze = GZ.GazeEstimator()
+            except Exception:
+                log.exception("Regard par les yeux indisponible — pose de tête seule")
+                self._gaze = False
+        if not self._gaze:
+            return
+        t = min(due, key=lambda t: t.last_gaze)          # un seul par image : coût borné (~15 ms)
+        t.last_gaze = now
+        try:
+            g = self._gaze.estimate(frame, t.face.box, t.face.landmarks)
+        except Exception:
+            log.exception("Estimation du regard en erreur")
+            return
+        if g is not None:
+            t.eyes.append((now, g.head_yaw, g.iris))
+
     def _is_looking(self, t: Track) -> bool:
         s = self.config.s
         f = t.face
-        return (f.rel_size >= s.min_face_size and abs(f.yaw - s.gaze_yaw) <= s.max_yaw
-                and -0.9 <= f.pitch - s.gaze_pitch <= 1.0)
+        if f.rel_size < s.min_face_size or not -0.9 <= f.pitch - s.gaze_pitch <= 1.0:
+            return False      # trop loin, ou tête franchement levée / baissée (le haut-bas des yeux est illisible)
+        eyes = t.eyes_looking(s.gaze_yaw / YAW_MESH_RATIO) if s.eye_gaze else None
+        if eyes is not None:
+            return eyes
+        return abs(f.yaw - s.gaze_yaw) <= s.max_yaw
 
     def _step_guard(self, obs: G.Observation, frame: np.ndarray | None = None) -> None:
         if not obs.camera_ok:
@@ -672,6 +707,7 @@ class Engine:
         v = self._verdict
         h, w = self._frame_shape
         faces = []
+        s_eye = self.config.s.eye_gaze
         for t in self._tracks:
             x, y, bw, bh = (float(c) for c in t.face.box)
             faces.append({
@@ -683,6 +719,7 @@ class Engine:
                 "screen_raw": round(t.moire_raw, 1) if t.moire_raw is not None else None,
                 "depth": t.depth,
                 "looking": self._is_looking(t), "yaw": round(t.face.yaw, 2), "pitch": round(t.face.pitch, 2),
+                "gaze_src": "yeux" if s_eye and t.eyes_looking() is not None else "tête",
             })
         now = time.time()
         return {

@@ -393,3 +393,28 @@ def test_profile_with_unavailable_model_is_not_matched(eng, monkeypatch):
     eng.reload_gallery()
     monkeypatch.setattr(eng.faces, "available", lambda m: m == "sface")
     assert eng._usable_models() == ["sface"]          # alice (SFace) reste reconnue, bob attend son modèle
+
+
+def _face_track(yaw):
+    from prankguard.vision.faces import Face, Track
+    f = Face(box=np.array([200, 100, 200, 240], np.float32), landmarks=np.zeros((5, 2), np.float32),
+             score=0.9, raw=np.zeros(15, np.float32), yaw=yaw, pitch=0.0, rel_size=0.5)
+    t = Track(face=f)
+    t.last_seen = 10.0
+    return t
+
+
+def test_eyes_override_head_pose_for_looking(eng):
+    t = _face_track(yaw=0.7)                        # tête tournée : la pose seule dit « ne regarde pas »
+    assert not eng._is_looking(t)
+    t.eyes.extend([(9.8, 0.5, -0.15), (9.9, 0.5, -0.16)])   # ... mais les yeux reviennent sur l'écran
+    assert eng._is_looking(t)
+    eng.config.update({"eye_gaze": False})
+    assert not eng._is_looking(t)                   # option désactivée : pose de tête seule
+
+
+def test_eyes_away_with_head_straight_is_not_looking(eng):
+    t = _face_track(yaw=0.0)
+    assert eng._is_looking(t)
+    t.eyes.extend([(9.8, 0.0, 0.14), (9.9, 0.0, 0.15)])
+    assert not eng._is_looking(t)

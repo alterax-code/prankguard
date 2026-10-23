@@ -3,6 +3,7 @@
 YuNet + SFace : OpenCV Zoo (MIT / Apache-2.0). MiniFASNet : Silent-Face-Anti-Spoofing, conversion
 ONNX de yakhyo/face-anti-spoofing (Apache-2.0). EdgeFace-XS (Idiap, CC BY-NC-SA 4.0 — usage non
 commercial) : jamais embarqué dans l'installeur, téléchargé au premier lancement et vérifié.
+MediaPipe Face Landmarker (Google, Apache-2.0) : direction des yeux.
 """
 from __future__ import annotations
 
@@ -42,7 +43,11 @@ FAS_V1SE = Model("MiniFASNetV1SE.onnx", _FAS + "MiniFASNetV1SE.onnx",
 EDGEFACE_XS = Model("edgeface_xs_gamma_06.onnx",
                     "https://huggingface.co/yakhyo/uniface-weights/resolve/main/edgeface_xs_gamma_06.onnx",
                     "9206e2eb13a2761d7b5b76e13016d4b9acd3fa3535a9a09939f3adacd139a5ff")
-ALL = (YUNET, SFACE, FAS_V2, FAS_V1SE)
+# MediaPipe Face Landmarker (478 points dont les iris, Google, Apache-2.0), portage ONNX yakhyo/mediapipe-face-mesh-onnx
+FACE_MESH = Model("face_landmarker_Nx3x256x256.onnx",
+                  "https://github.com/yakhyo/mediapipe-face-mesh-onnx/releases/download/weights/face_landmarker_Nx3x256x256.onnx",
+                  "111795f8703cdeb6d0c68a9f3cc966a0f23f8786bb00f4577a11f461fc4276ac")
+ALL = (YUNET, SFACE, FAS_V2, FAS_V1SE, FACE_MESH)
 
 
 def sha256(p: Path) -> str:
