@@ -430,6 +430,7 @@ class Engine:
             "countdown": round(v.countdown, 1) if v.countdown is not None else None,
             "owner": v.owner,
             "armed": self.guard.armed, "locked": self.guard.locked,
+            "camera_waived": self.guard._cam_waived,
             "snooze_left": max(0, int(self._snooze_until - now)) if self._snooze_until else 0,
             "faces": faces,
             "camera": {"open": self.camera.is_open, "error": self.camera.last_error,

@@ -132,6 +132,22 @@ def test_flickering_stranger_detection_still_locks():
     assert locked and t - 10.0 <= 1.5 + 0.2
 
 
+def test_no_relock_loop_when_owner_keeps_camera_masked():
+    """Après un verrouillage « caméra masquée », le propriétaire qui déverrouille avec l'objectif
+    toujours fermé n'est pas reverrouillé en boucle ; la règle se réactive dès que l'image revient."""
+    g = started(lock_on_camera_lost=True, camera_lost_delay=2.0, rearm_delay=0.0)
+    g.step(obs(10.0, cam=False))
+    assert g.step(obs(12.5, cam=False)).action == "lock"
+    g.on_session_locked()
+    g.on_session_unlocked(20.0)
+    for t in (21.0, 30.0, 40.0, 60.0):
+        v = g.step(obs(t, cam=False))
+        assert v.action is None and v.state in (G.STARTING, G.CAMERA_LOST)
+    assert g.step(obs(61.0)).state == G.IDLE          # l'image revient
+    g.step(obs(62.0, cam=False))
+    assert g.step(obs(64.5, cam=False)).action == "lock"   # règle de nouveau active
+
+
 def test_camera_restart_gives_startup_grace():
     """Revue #8 : après une reprise de veille, la caméra a de nouveau STARTUP_GRACE pour revenir."""
     g = started(lock_on_camera_lost=True, camera_lost_delay=2.0)

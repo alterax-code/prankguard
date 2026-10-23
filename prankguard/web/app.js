@@ -107,6 +107,7 @@ function onState(st) {
   if (st.state === "paused" && st.snooze_left) sub = `Reprise automatique dans ${fmtDur(st.snooze_left)}.`;
   if (st.state === "camera_lost" && st.camera.dark) sub = "L'objectif semble masqué.";
   if (st.state === "camera_lost" && st.camera.error) sub = st.camera.error;
+  if (st.state === "camera_lost" && st.camera_waived) sub = "Objectif fermé après votre déverrouillage : pas de nouveau verrouillage tant que l'image ne revient pas.";
   if (st.state === "idle" && !st.profiles) sub = "Aucun profil enregistré : tout visage sera considéré comme inconnu.";
   if (st.countdown != null) {
     if (st.state === "alert") sub = `Verrouillage dans ${st.countdown.toFixed(1)} s`;

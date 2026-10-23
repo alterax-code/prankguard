@@ -58,6 +58,8 @@ class Guard:
         self._arming_until = 0.0
         self._started = False
         self._start_ref = 0.0
+        self._last_lock_camera = False
+        self._cam_waived = False
         self._reset_timers()
         self.owner_last_seen = float("-inf")
         self.owner_name: str | None = None
@@ -89,6 +91,10 @@ class Guard:
 
     def on_session_unlocked(self, now: float) -> None:
         self.locked = False
+        # Verrouillé pour caméra masquée puis déverrouillé par le propriétaire (mot de passe) :
+        # l'objectif fermé est volontaire, on ne reverrouille pas en boucle tant que l'image n'est pas revenue.
+        self._cam_waived = self._last_lock_camera
+        self._last_lock_camera = False
         self._started = False
         self._start_ref = now
         # celui qui vient de déverrouiller a tapé le mot de passe : on considère le propriétaire présent
@@ -120,14 +126,16 @@ class Guard:
                 return Verdict(STARTING)
             if self._cam_lost_since is None:
                 self._cam_lost_since = now
-            if s.lock_on_camera_lost and self.enrolled and now >= self._arming_until:
+            if s.lock_on_camera_lost and self.enrolled and not self._cam_waived and now >= self._arming_until:
                 left = s.camera_lost_delay - (now - self._cam_lost_since)
                 if left <= 0:
+                    self._last_lock_camera = True
                     return self._lock(CAMERA_LOST, "Caméra indisponible ou masquée")
                 return Verdict(CAMERA_LOST, countdown=left)
             return Verdict(CAMERA_LOST)
         self._started = True
         self._cam_lost_since = None
+        self._cam_waived = False
 
         self._track_owner(obs)
         if not self.enrolled:
