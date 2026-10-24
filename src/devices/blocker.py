@@ -1,25 +1,26 @@
 """
-Blocage de périphériques via registre Windows et services.
-FIX 7 — Blocage effectif BT (service bthserv) et réseau (netsh).
-FIX 5 — Mode DESKTOP (USBSTOR seul) vs LAPTOP (tout USB).
+Blocage de peripheriques via registre Windows et services.
+Blocage USB, Bluetooth, et reseau effectifs.
 """
 import subprocess
-from typing import Optional
+import time
+from typing import Optional, List
 
 from src.logger import logger
 
-# Flag pour masquer la fenêtre cmd
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
 
 def _run_cmd(cmd: list, description: str = "") -> bool:
-    """Exécute une commande système silencieusement."""
+    """Execute une commande systeme silencieusement."""
     try:
         result = subprocess.run(
             cmd, capture_output=True, creationflags=_NO_WINDOW, timeout=10
         )
         if result.returncode != 0 and description:
-            logger.error(f"Échec {description}: {result.stderr.decode(errors='ignore').strip()}")
+            stderr = result.stderr.decode(errors="ignore").strip()
+            if stderr:
+                logger.error(f"Echec {description}: {stderr}")
         return result.returncode == 0
     except Exception as e:
         if description:
@@ -27,13 +28,10 @@ def _run_cmd(cmd: list, description: str = "") -> bool:
         return False
 
 
-# ── USB ──────────────────────────────────────────────────────────────
+# -- USB --
 
 def block_usb(mode: str = "DESKTOP"):
-    """
-    Bloque les ports USB via le registre.
-    FIX 5 — DESKTOP: stockage seul | LAPTOP: tout USB.
-    """
+    """Bloque les ports USB via le registre."""
     if mode == "DESKTOP":
         services = ["USBSTOR"]
     else:
@@ -41,92 +39,135 @@ def block_usb(mode: str = "DESKTOP"):
 
     for svc in services:
         _run_cmd(
-            ["reg", "add", f"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{svc}",
+            ["reg", "add",
+             f"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{svc}",
              "/v", "Start", "/t", "REG_DWORD", "/d", "4", "/f"],
             f"block {svc}"
         )
-    logger.lock(f"USB bloqué (mode {mode}) — services: {', '.join(services)}")
+    logger.lock(f"USB bloque (mode {mode})")
 
 
 def unblock_usb():
-    """Débloque tous les ports USB."""
+    """Debloque tous les ports USB."""
     for svc in ["USBHUB3", "USBXHCI", "USBSTOR"]:
         _run_cmd(
-            ["reg", "add", f"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{svc}",
+            ["reg", "add",
+             f"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{svc}",
              "/v", "Start", "/t", "REG_DWORD", "/d", "3", "/f"],
             f"unblock {svc}"
         )
-    logger.unlock("USB débloqué — tous les services restaurés")
+    logger.unlock("USB debloque")
 
 
-# ── Bluetooth ────────────────────────────────────────────────────────
+# -- Bluetooth --
 
 def block_bluetooth():
-    """
-    FIX 7 — Bloque le Bluetooth AVANT que la connexion ne s'établisse.
-    Arrête le service bthserv + désactive BTHUSB dans le registre.
-    """
+    """Bloque le Bluetooth (service + registre)."""
     _run_cmd(["sc", "stop", "bthserv"], "stop bthserv")
     _run_cmd(["sc", "config", "bthserv", "start=", "disabled"], "disable bthserv")
     _run_cmd(
-        ["reg", "add", "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHUSB",
+        ["reg", "add",
+         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHUSB",
          "/v", "Start", "/t", "REG_DWORD", "/d", "4", "/f"],
         "block BTHUSB"
     )
-    logger.lock("Bluetooth bloqué — service bthserv arrêté + BTHUSB désactivé")
+    logger.lock("Bluetooth bloque")
 
 
 def unblock_bluetooth():
     """Restaure le Bluetooth."""
     _run_cmd(
-        ["reg", "add", "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHUSB",
+        ["reg", "add",
+         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHUSB",
          "/v", "Start", "/t", "REG_DWORD", "/d", "3", "/f"],
         "unblock BTHUSB"
     )
     _run_cmd(["sc", "config", "bthserv", "start=", "demand"], "enable bthserv")
     _run_cmd(["sc", "start", "bthserv"], "start bthserv")
-    logger.unlock("Bluetooth restauré — service bthserv redémarré")
+    logger.unlock("Bluetooth restaure")
 
 
-# ── Réseau ───────────────────────────────────────────────────────────
+# -- Reseau --
+
+def _get_active_interfaces() -> List[str]:
+    """Recupere la liste des interfaces reseau actives (FR + EN compatible)."""
+    interfaces = []
+    try:
+        result = subprocess.run(
+            ["netsh", "interface", "show", "interface"],
+            capture_output=True, text=True, creationflags=_NO_WINDOW, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            lower = line.lower()
+            # Detecter les interfaces connectees (FR: "connect", EN: "connected")
+            if "connect" in lower and "disconnect" not in lower:
+                parts = line.split()
+                if len(parts) >= 4:
+                    # Le nom de l'interface est tout apres le 3eme champ
+                    name = " ".join(parts[3:])
+                    # Ignorer les headers
+                    if name.lower() not in ["name", "nom", "interface name"]:
+                        interfaces.append(name)
+    except Exception as e:
+        logger.error(f"Erreur listing interfaces: {e}")
+    return interfaces
+
 
 def block_network(interface_name: Optional[str] = None):
     """
-    FIX 7 — Désactive une interface réseau via netsh.
-    Si aucun nom n'est donné, désactive toutes les interfaces connectées.
+    Desactive une ou toutes les interfaces reseau via netsh.
+    Bloque EFFECTIVEMENT la connexion.
     """
     if interface_name:
-        _run_cmd(
-            ["netsh", "interface", "set", "interface", interface_name, "admin=disable"],
-            f"disable réseau {interface_name}"
-        )
-        logger.lock(f"Réseau bloqué — interface: {interface_name}")
+        targets = [interface_name]
     else:
-        # Désactiver toutes les interfaces actives
-        try:
-            result = subprocess.run(
-                ["netsh", "interface", "show", "interface"],
-                capture_output=True, text=True, creationflags=_NO_WINDOW
-            )
-            for line in result.stdout.splitlines():
-                if "Connected" in line or "Connecté" in line:
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        name = " ".join(parts[3:])
-                        _run_cmd(
-                            ["netsh", "interface", "set", "interface", name, "admin=disable"],
-                            f"disable réseau {name}"
-                        )
-            logger.lock("Réseau bloqué — toutes les interfaces désactivées")
-        except Exception as e:
-            logger.error(f"Erreur blocage réseau: {e}")
+        targets = _get_active_interfaces()
+
+    blocked = []
+    for name in targets:
+        success = _run_cmd(
+            ["netsh", "interface", "set", "interface", name, "admin=disable"],
+            f"disable reseau {name}"
+        )
+        if success:
+            blocked.append(name)
+
+    if blocked:
+        logger.lock(f"Reseau bloque : {', '.join(blocked)}")
+    else:
+        logger.error("Aucune interface reseau bloquee (droits admin ?)")
+
+    return blocked
 
 
 def unblock_network(interface_name: Optional[str] = None):
-    """Réactive une interface réseau."""
+    """Reactive une ou toutes les interfaces reseau."""
     if interface_name:
+        targets = [interface_name]
+    else:
+        # Lister TOUTES les interfaces (meme desactivees)
+        targets = []
+        try:
+            result = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True, text=True, creationflags=_NO_WINDOW, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                lower = line.lower()
+                if "disconnect" in lower or "desactiv" in lower or "disabled" in lower:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        name = " ".join(parts[3:])
+                        if name.lower() not in ["name", "nom", "interface name"]:
+                            targets.append(name)
+        except Exception:
+            pass
+
+    for name in targets:
         _run_cmd(
-            ["netsh", "interface", "set", "interface", interface_name, "admin=enable"],
-            f"enable réseau {interface_name}"
+            ["netsh", "interface", "set", "interface", name, "admin=enable"],
+            f"enable reseau {name}"
         )
-        logger.unlock(f"Réseau restauré — interface: {interface_name}")
+
+    if targets:
+        logger.unlock(f"Reseau restaure : {', '.join(targets)}")
